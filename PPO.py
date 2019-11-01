@@ -5,7 +5,6 @@ import gym
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
 class Memory:
     def __init__(self):
         self.actions = []
@@ -13,14 +12,12 @@ class Memory:
         self.logprobs = []
         self.rewards = []
         self.is_terminals = []
-
     def clear_memory(self):
         del self.actions[:]
         del self.states[:]
         del self.logprobs[:]
         del self.rewards[:]
         del self.is_terminals[:]
-
 
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, n_latent_var):
@@ -195,7 +192,6 @@ def main():
     running_reward = 0
     avg_length = 0
     timestep = 0
-
     # training loop
     for i_episode in range(1, max_episodes+1):
         state = env.reset()
@@ -215,7 +211,6 @@ def main():
                 ppo.update(memory)
                 memory.clear_memory()
                 timestep = 0
-
             running_reward += reward
             if render:
                 env.render()
