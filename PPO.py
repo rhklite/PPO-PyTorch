@@ -5,6 +5,7 @@ import gym
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
 class Memory:
     def __init__(self):
         self.actions = []
@@ -12,6 +13,7 @@ class Memory:
         self.logprobs = []
         self.rewards = []
         self.is_terminals = []
+
     def clear_memory(self):
         del self.actions[:]
         del self.states[:]
@@ -19,10 +21,11 @@ class Memory:
         del self.rewards[:]
         del self.is_terminals[:]
 
+
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, n_latent_var):
         super(ActorCritic, self).__init__()
-        self.affine = nn.Linear(state_dim, n_latent_var)
+        # self.affine = nn.Linear(state_dim, n_latent_var)
 
         # actor
         self.action_layer = nn.Sequential(
@@ -83,7 +86,8 @@ class ActorCritic(nn.Module):
 
 
 class PPO:
-    def __init__(self, state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip):
+    def __init__(self, state_dim, action_dim, n_latent_var, lr, betas, gamma,
+                 K_epochs, eps_clip):
         self.lr = lr
         self.betas = betas
         self.gamma = gamma
@@ -110,12 +114,12 @@ class PPO:
         # Monte Carlo estimate of state rewards:
         rewards = []
         discounted_reward = 0
-        for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
+        for reward, is_terminal in zip(reversed(memory.rewards),
+                                       reversed(memory.is_terminals)):
             if is_terminal:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma * discounted_reward)
             rewards.insert(0, discounted_reward)
-
 
         # Normalizing the rewards:
         rewards = torch.tensor(rewards).to(device)
@@ -123,6 +127,10 @@ class PPO:
 
         # convert list to tensor
         old_states = torch.stack(memory.states).to(device).detach()
+        # print(memory.states)
+        # print(old_states)
+        # print(memory.states[0].shape)
+        # print(old_states.shape)
         old_actions = torch.stack(memory.actions).to(device).detach()
         old_logprobs = torch.stack(memory.logprobs).to(device).detach()
 
@@ -142,7 +150,7 @@ class PPO:
             surr2 = torch.clamp(ratios, 1-self.eps_clip,
                                 1+self.eps_clip) * advantages
 
-            # see paperfor this loss formulation; this loss function is 
+            # see paperfor this loss formulation; this loss function is
             # used since both the actor and critic network shares the loss
             # function
             loss = -torch.min(surr1, surr2) + 0.5 * \
