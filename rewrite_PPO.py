@@ -1,11 +1,14 @@
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
+from torch.utils.tensorboard import SummaryWriter
 import gym
 
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 device = "cpu"
 print(torch.__version__)
+writer = SummaryWriter()
+
 
 class Memory:
     def __init__(self):
@@ -27,6 +30,7 @@ class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, n_latent_var):
         super(ActorCritic, self).__init__()
 
+        
         # actor
         self.action_layer = nn.Sequential(
             nn.Linear(state_dim, n_latent_var),
@@ -189,7 +193,7 @@ def main():
     action_dim = 4
     render = False
     solved_reward = 230         # stop training if avg_reward > solved_reward
-    log_interval = 20           # print avg reward in the interval
+    log_interval = 1           # print avg reward in the interval
     max_episodes = 50000        # max training episodes
     max_timesteps = 300         # max timesteps in one episode
     n_latent_var = 64           # number of variables in hidden layer
@@ -213,7 +217,7 @@ def main():
     print("Learning Rate: "+str(lr)+"Betas: "+str(betas))
 
     # logging variables
-    running_reward = 0
+    running_reward = []
     avg_length = 0
     timestep = 0
 
@@ -236,7 +240,8 @@ def main():
                 ppo.update(memory)
                 memory.clear_memory()
                 timestep = 0
-            running_reward += reward
+            # running_reward += reward
+            running_reward.append(reward)
             if render:
                 env.render()
             if done:
@@ -245,21 +250,29 @@ def main():
         avg_length += t
 
         # stop training if avg_reward > solved_reward
-        if running_reward > (log_interval*solved_reward):
+        if sum(running_reward[-10:])/len(running_reward[-10:]) > \
+                (log_interval*solved_reward):
             print("Solved!")
             torch.save(ppo.policy.state_dict(),
                        './PPO_{}.pth'.format(env_name))
             break
 
+        writer.add_graph(ppo.policy.action_layer,
+                         input_to_model=torch.from_numpy(state).float())
+
         # logging
         if i_episode % log_interval == 0:
             avg_length = int(avg_length/log_interval)
-            running_reward = int((running_reward/log_interval))
+            current_reward = int((running_reward[-1]/log_interval))
 
             print('Episode {} \t avg length: {} \t reward: {}'.format(
-                i_episode, avg_length, running_reward))
-            running_reward = 0
+                i_episode, avg_length, current_reward))
+            writer.add_scalar('Average Episode Length', avg_length, i_episode)
+            writer.add_scalar('Average Episode Reward',
+                              current_reward, i_episode)
+            running_reward = []
             avg_length = 0
+
 
 if __name__ == '__main__':
     main()
