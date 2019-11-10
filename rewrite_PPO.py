@@ -131,7 +131,7 @@ class PPO:
             # R5, R4, R3, R2... so this formulation makes sense
             discounted_reward = reward + (self.gamma*discounted_reward)
             rewards.insert(0, discounted_reward)
-
+        print(rewards)
         # Normalizing the reward. But why?
         # https://datascience.stackexchange.com/a/20127
         # this is done for PRACTICAL reasons, not theoritical

@@ -103,8 +103,9 @@ class PPO:
         self.MseLoss = nn.MSELoss()
 
     def update(self, memory):
+        # TODO: implement policy updaaate
         pass
-    
+
 
 class Agent:
     """creating a single agent, which contains the agent's gym environment
@@ -140,14 +141,14 @@ class ParallelAgents:
             env = Agent(agent_id, env_name=env_name, seed=seed, render=render)
             self.agents.append(env)
 
-    def act(self, agent, action):
-        """having an agent to take a step. This function is made so it can be
-        used for parallel agents
+    def env_step(self, agent, agent_policy):
+        """having an agent to take a step in the environment. This function is
+        made so it can be used for parallel agents
         Args:
             agent (class Agent): the agent object for taking actions
         Return: agent_reward (list): a list of reward from each episode
         """
-        print(action)
+        print(agent_policy)
         for i in range(self.episodes):
 
             # prints episode progress
@@ -155,6 +156,8 @@ class ParallelAgents:
                 print("Agent {} at episode {}".format(agent.agent_id, i))
 
             state = agent.env.reset()
+
+            
             timestep = 0
             for t in range(self.max_timestep):
                 timestep += 1
@@ -176,35 +179,75 @@ class ParallelAgents:
               format(agent.agent_id, self.episodes, os.getpid()))
         return self.memory
 
-    def parallelAct(self):
-        """run the act() function in a process pool. The result returned is a
+    def parallelAct(self, agent_policy):
+        """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
         p = mp.Pool()
-        # TODO actually send in an action to act, the repeat('hi') is a place holder
-        result = p.starmap(self.act, zip(self.agents, repeat('hi')))
+        result = p.starmap(self.env_step, zip(
+            self.agents, repeat(agent_policy)))
         print(result)
 
 
 def main():
-    # configuration
-    env_nam = "LunarLander-v2"
+
+    # Training Environment configuration
+    env_name = "LunarLander-v2"
     num_agent = 3
-    render = False
+    render = True
     episode = 5
     max_timestep = 300
     seed = None
+    training_iter = 1        # total number of training episodes
 
-    # run parallel agents
+    # gets the parameter about the environment
+    tmp_env = gym.make(env_name)
+    state_dim = tmp_env.observation_space.shape[0]
+    action_dim = tmp_env.action_space.n
+    del tmp_env
+
+    # PPO & Network Parameters
+    n_latent_var = 64
+    lr = 0.002
+    betas = (0.9, 0.999)
+    gamma = 0.99
+    K_epochs = 4
+    eps_clip = 0.2
+
+    # uncomment this and add .to(device) after agent_policy
+    #  if sending agent_policy to GPU, it actually made it slower...
+    # mp.set_start_method('spawn')
+
+    # timer to see time it took to train
+
     start = time.perf_counter()
-    agents = ParallelAgents(
-        num_agent=num_agent, env_name=env_nam, max_timestep=max_timestep,
-        seed=seed, render=render, episode=episode
-    )
-    agents.parallelAct()
-    end = time.perf_counter()
+    # initialize PPO policy instance
+    ppo = PPO(state_dim, action_dim, n_latent_var,
+              lr, betas, gamma, K_epochs, eps_clip)
 
-    print("Program done, {:.2f} sec elapsed".format(end-start))
+    # initialize parallel agent intance
+    agents = ParallelAgents(num_agent, episode, env_name,
+                            max_timestep, seed, render)
+
+    for _ in range(training_iter):
+
+        train_start = time.perf_counter()
+        # making a copy of the actor for the parallel agents
+        agent_policy = ActorCritic(
+            state_dim, action_dim, n_latent_var)
+        agent_policy.load_state_dict(ppo.policy_old.state_dict())
+
+        # TODO this is pretty much place holder right now
+        memory = agents.parallelAct(agent_policy)
+
+        ppo.update(memory)
+        train_end = time.perf_counter()
+
+        print("Training iteration done, {:.2f} sec elapsed".format(
+            train_end-train_start))
+
+    end = time.perf_counter()
+    print("Training iteration done, {:.2f} sec elapsed".format(end-start))
 
 
 if __name__ == "__main__":
