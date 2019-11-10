@@ -5,20 +5,34 @@ import concurrent.futures
 
 
 class C:
-    def f(self):
+    def __init__(self):
+        self.sharedlist = []
+
+
+    def f(self, dummy):
         # print('hello %s,' % name)
         print('hello Dave')
-        time.sleep(5)
+        time.sleep(0)
         print('nice to meet you.')
+        self.sharedlist.append(1)
+
+        print(self.sharedlist)
+        return self.sharedlist
 
     def run(self):
-        # pool = Pool()
-        # pool.map(self.f, ('frank', 'justin', 'osi', 'thomas'))
+        pool = Pool()
+        results = pool.map(self.f, ('frank', 'justin', 'osi', 'thomas'))
 
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = [executor.submit(self.f) for _ in range(5)]
+        # with concurrent.futures.ProcessPoolExecutor() as executor:
+        #     results = [executor.submit(self.f) for _ in range(5)]
 
+
+        print(results)
+        for result in results:
+            print(result)
+            
 
 if __name__ == '__main__':
     c = C()
     c.run()
+    print(c.sharedlist)

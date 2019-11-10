@@ -2,36 +2,38 @@
 import os
 import gym
 import time
-from itertools import repeat
 import torch
 import torch.nn as nn
 import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = "cpu"
+
+
+# uncomment this and add .to(device) after agent_policy
+#  if sending agent_policy to GPU, it actually made it slower...
+# TODO: test if code is faster with CPU or GPU
+mp.set_start_method('spawn', True)
 writer = SummaryWriter()
 
 
 class Memory:
     def __init__(self):
-        # self.actions = torch.tensor(1).share_memory_()
-        # self.states = torch.tensor(1).share_memory_()
-        # self.logprobs = torch.tensor(1).share_memory_()
-        # self.rewards = torch.tensor(1).share_memory_()
-        # self.is_terminal = torch.tensor(1).share_memory_()
         self.actions = []
         self.states = []
         self.logprobs = []
         self.rewards = []
         self.is_terminal = []
 
-    # def clear_memory(self):
-    #     del self.actions[:]
-    #     del self.states[:]
-    #     del self.logprobs[:]
-    #     del self.rewards[:]
-    #     del self.is_terminal[:]
+    def clear_memory(self):
+        # TODO change this clear_memory method to work with tensors
+        del self.actions[:]
+        del self.states[:]
+        del self.logprobs[:]
+        del self.rewards[:]
+        del self.is_terminal[:]
 
 
 class ActorCritic(nn.Module):
@@ -43,7 +45,7 @@ class ActorCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(n_latent_var, n_latent_var),
             nn.ReLU(),
-            nn.Linear(n_latent_var, n_latent_var),
+            nn.Linear(n_latent_var, action_dim),
             nn.Softmax(dim=-1)
         )
 
@@ -59,15 +61,14 @@ class ActorCritic(nn.Module):
         raise NotImplementedError
 
     def act(self, state, memory):
-        state.torch.from_numpy(state).float().to(device)
-        action_probs = self.act(state)
+        state = torch.from_numpy(state).float().to(device)
+        action_probs = self.action_layer(state)
         dist = Categorical(action_probs)
         action = dist.sample()
 
-        memory.state.append(state)
+        memory.states.append(state)
         memory.actions.append(action)
         memory.logprobs.append(dist.log_prob(action))
-
         return action.item()
 
 
@@ -104,6 +105,8 @@ class PPO:
 
     def update(self, memory):
         # TODO: implement policy updaaate
+        # requires state, action, reward, old_logprob, all of which are
+        # 1D tensors
         pass
 
 
@@ -128,75 +131,90 @@ class ParallelAgents:
     """a wrapper for running parallel agents.
     """
 
-    def __init__(self, num_agent, episode, env_name,
-                 max_timestep, seed=None, render=False):
-        """creates instances of agents here
+    def __init__(self, num_agent, env_name, timestep,
+                 state_dim, action_dim, n_latent_var,
+                 seed=None, render=False):
+        """creates instances of parallel agents here for
+
+        Args:
+            num_agent (int): number of parallel agents to run
+            env_name (string): the OpenAI gym environment to run
+            timestep (int): the number of time steps to take for each agent
+                before returning the collected memory for update. timestep
+                instead of episode is used here because the paper asks for
+                partial trajectories
+            state_dim (int): size of state observation, used for creating
+                agent policy
+            action_dim (int): size of action space, used for creating agent
+                policy
+            n_latent_var (int): size of hidden layer, used for creating agent
+                policy
+            seed (int): random seed for gym environment
+            render (bool): whether to render the gym environment as it trains
         """
         assert num_agent > 0, "Number of agents must be positive"
+        # TODO: is memory actually being shared?
         self.memory = Memory()
-        self.max_timestep = max_timestep
-        self.episodes = episode
+
+        # the policy which the parallel agents will act on
+        self.agent_policy = ActorCritic(
+            state_dim, action_dim, n_latent_var).to(device)
+        self.timestep = timestep
         self.agents = []
         for agent_id in range(num_agent):
             env = Agent(agent_id, env_name=env_name, seed=seed, render=render)
             self.agents.append(env)
 
-    def env_step(self, agent, agent_policy):
+    def env_step(self, agent):
         """having an agent to take a step in the environment. This function is
         made so it can be used for parallel agents
         Args:
-            agent (class Agent): the agent object for taking actions
-        Return: agent_reward (list): a list of reward from each episode
+            agent (obj Agent): the agent object for taking actions
         """
-        print(agent_policy)
-        for i in range(self.episodes):
+        # print(agent_policy)
+        state = agent.env.reset()
 
-            # prints episode progress
-            if i+1 % 100 == 0:
-                print("Agent {} at episode {}".format(agent.agent_id, i))
+        for t in range(self.timestep):
 
-            state = agent.env.reset()
+            action = self.agent_policy.act(state, self.memory)
+            state, reward, done, _ = agent.env.step(action)
 
-            
-            timestep = 0
-            for t in range(self.max_timestep):
-                timestep += 1
-                # observation, reward, done, info
-                state, reward, done, _ = agent.env.step(
-                    agent.env.action_space.sample())
+            # save reward and environment state into memory
+            # TODO switch memory to tensor.shared_memory()
+            self.memory.rewards.append(reward)
+            self.memory.is_terminal.append(done)
 
-                # save reward and environment state into memory
-                self.memory.rewards.append(reward)
-                self.memory.is_terminal.append(done)
+            if agent.render:
+                agent.env.render()
 
-                if agent.render:
-                    agent.env.render()
+            if done:
+                state = agent.env.reset()
 
-                if done:
-                    break
+        print("Agent {} took {} steps, Worker process ID {}".
+              format(agent.agent_id, self.timestep, os.getpid()))
+        # return self.memory
 
-        print("Agent {} completed {} episodes, Worker process ID {}".
-              format(agent.agent_id, self.episodes, os.getpid()))
-        return self.memory
-
-    def parallelAct(self, agent_policy):
+    def parallelAct(self):
         """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
+
+        self.memory.clear_memory()
         p = mp.Pool()
-        result = p.starmap(self.env_step, zip(
-            self.agents, repeat(agent_policy)))
-        print(result)
+        p.map(self.env_step, self.agents)
+        return self.memory
+
+    def updateAgentPolicy(self, agent_policy):
+        self.agent_policy.load_state_dict(agent_policy)
 
 
 def main():
 
     # Training Environment configuration
     env_name = "LunarLander-v2"
-    num_agent = 3
+    num_agent = 4
     render = True
-    episode = 5
-    max_timestep = 300
+    timestep = 2000
     seed = None
     training_iter = 1        # total number of training episodes
 
@@ -205,7 +223,6 @@ def main():
     state_dim = tmp_env.observation_space.shape[0]
     action_dim = tmp_env.action_space.n
     del tmp_env
-
     # PPO & Network Parameters
     n_latent_var = 64
     lr = 0.002
@@ -214,40 +231,36 @@ def main():
     K_epochs = 4
     eps_clip = 0.2
 
-    # uncomment this and add .to(device) after agent_policy
-    #  if sending agent_policy to GPU, it actually made it slower...
-    # mp.set_start_method('spawn')
-
     # timer to see time it took to train
-
     start = time.perf_counter()
+
     # initialize PPO policy instance
     ppo = PPO(state_dim, action_dim, n_latent_var,
               lr, betas, gamma, K_epochs, eps_clip)
 
     # initialize parallel agent intance
-    agents = ParallelAgents(num_agent, episode, env_name,
-                            max_timestep, seed, render)
+    agents = ParallelAgents(num_agent, env_name, timestep,
+                            state_dim, action_dim, n_latent_var,
+                            seed, render)
 
-    for _ in range(training_iter):
+    for i in range(1, training_iter+1):
 
         train_start = time.perf_counter()
         # making a copy of the actor for the parallel agents
-        agent_policy = ActorCritic(
-            state_dim, action_dim, n_latent_var)
-        agent_policy.load_state_dict(ppo.policy_old.state_dict())
+        agents.updateAgentPolicy(ppo.policy_old.state_dict())
 
-        # TODO this is pretty much place holder right now
-        memory = agents.parallelAct(agent_policy)
+        # tell all the parallel agents to act according to the policy
+        memory = agents.parallelAct()
 
+        # update the policy with the memories collected from the agents
         ppo.update(memory)
         train_end = time.perf_counter()
 
-        print("Training iteration done, {:.2f} sec elapsed".format(
-            train_end-train_start))
+        print("Training iteration {} done, {:.2f} sec elapsed".
+              format(i, train_end-train_start))
 
     end = time.perf_counter()
-    print("Training iteration done, {:.2f} sec elapsed".format(end-start))
+    print("Training Completed, {:.2f} sec elapsed".format(end-start))
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 import gym
 
-# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 device = "cpu"
 print(torch.__version__)
 writer = SummaryWriter()
@@ -30,7 +30,6 @@ class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, n_latent_var):
         super(ActorCritic, self).__init__()
 
-        
         # actor
         self.action_layer = nn.Sequential(
             nn.Linear(state_dim, n_latent_var),
@@ -126,12 +125,32 @@ class PPO:
         for reward, is_terminal in zip(reversed(memory.rewards),
                                        reversed(memory.is_terminal)):
             if is_terminal:
+                # by setting discounted reward = 0; this would serve as a
+                # break between episodes. because then the expected return
+                # at this point would only be ther terminal reward when
+                # calculating the discounted reward.
                 discounted_reward = 0
             # the reward sequence from this iterator recieved is...
             # R5, R4, R3, R2... so this formulation makes sense
             discounted_reward = reward + (self.gamma*discounted_reward)
+            # insert at localtion 0, since the discounted reward sequence was
+            # calculated from T first to n, so by inserting each discounted
+            # reward calculated into position 0 the rewards list would look
+            # like [n, n+1, n+2,... T ]
             rewards.insert(0, discounted_reward)
         print(rewards)
+
+        # the rewards variable is type(list) of the discounted expected return.
+
+        # regarding this reward here; each discounted reward inserted would
+        # correspond to a state. and each discounted reward in the rewards list
+        # is calculated with discounting starting from that state.
+        # basically, if a trajectory yields [s0, s1, s2,...,sn]
+        # the rewards list would look like [R0, R1, ... Rn], with each element
+        # of this list being the discounted expected return at that state.
+        # recall that the expected return is the discounted summation of
+        # the reward trajectory
+
         # Normalizing the reward. But why?
         # https://datascience.stackexchange.com/a/20127
         # this is done for PRACTICAL reasons, not theoritical
@@ -145,17 +164,55 @@ class PPO:
         rewards = (rewards - rewards.mean())/(rewards.std()+1e-5)
 
         # convert the memory's lists of tensors into a single tensor
+
+        # memory.states is a list of tensors.
+        # each element is a tensor of one state, which a size 8 list, because
+        # the environment observation is a size 8 vector
+
+        # old_states is stacking the list of tensors into a single tensor that
+        # now has an additional column dimension
+        # before stack [tensor[], tensor[]]
+        # after stack tensor[ [], [] ]
         old_states = torch.stack(memory.states).to(device).detach()
+
+        # same thing as actions
         old_actions = torch.stack(memory.actions).to(device).detach()
+
+        # actions and states didn't actually need to be detached, because they
+        # didn't come from the actor-critic network. but logprobs needs to be
+        # because log is actually produced by the actor network. If you run
+        # this in debug mode, you will notice that ...
+        # memory.logprobs: require_grad = True
+        # for memory.action and memory.state, its false
         old_logprobs = torch.stack(memory.logprobs).to(device).detach()
+
+        # when doing this for parallel agents, APPEND all the experiences of
+        # each agent to the list.
+        # when calculating the expected return of each agent, i think I need to
+        # calculate the discounted return first, then append.
+        # because otherwise, other agents might contain a PARTIAL TRAJECTORY.
+        # imagine a scenario where a agent ended with a partial trajectory,
+        # when append reward to that agent before calculating the discounted
+        # return, this partial trajectory will not have the correct return
+        # because there is no is_terminal to indicate the end of an episode
+
+        # TODO look into how LSTM might have an affect on this
+        # TODO look into if LSTM in the current DRL sim2real stuff is actually
+        # helping or not
+        # paper: Deep Recurrent Q-Learning for Partially Observable MDPs
+        # additionally, PPO paper talks about an advantage function that works
+        # well for recurrent networks
+        # the A3C paper also talks about asyn method and recurrent networks
 
         print(memory)
         print(memory.states)
         print(old_states)
         # Optimize policy for k epochs:
         # this part is some what confusing to me. The same set of experiences
-        # is used to update the network K times... The paper said this is the way for
-        # PPO using fixed-length trajectory segment
+        # is used to update the network K times... The paper said this is the
+        # way for PPO using fixed-length trajectory segment
+        # TODO look into fixed-length trajectory segment
+        # according to Daniel, this is updating method is also common
         for _ in range(self.K_epochs):
             # Evaluating old actions and values:
             logprobs, state_values, dist_entropy = self.policy.evaluate(
@@ -225,6 +282,7 @@ def main():
     timestep = 0
 
     # training loop
+    # max episodes is more of a stoping condition
     for i_episode in range(1, max_episodes+1):
         state = env.reset()
         for t in range(max_timesteps):
