@@ -1,2 +1,4 @@
 .vscode
 runs/
+*.pyc
+__pycache__

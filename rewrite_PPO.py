@@ -149,6 +149,9 @@ class PPO:
         old_actions = torch.stack(memory.actions).to(device).detach()
         old_logprobs = torch.stack(memory.logprobs).to(device).detach()
 
+        print(memory)
+        print(memory.states)
+        print(old_states)
         # Optimize policy for k epochs:
         # this part is some what confusing to me. The same set of experiences
         # is used to update the network K times... The paper said this is the way for
