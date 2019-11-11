@@ -12,6 +12,7 @@ def main():
         L = pool.starmap(func, [(1, 1), (2, 1), (3, 1)])
         print(L)
         M = pool.starmap(func, zip(a_args, repeat(second_arg)))
+        print(M)
         N = pool.map(partial(func, b=second_arg), a_args)
         assert L == M == N
 
