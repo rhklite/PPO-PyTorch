@@ -1,5 +1,6 @@
 # TODO: test if code is faster with CPU or GPU
 # TODO: see how to use FP16 instead of FP32
+# TODO: remove unnecessary .to(device) to save memory
 import os
 import gym
 import time
@@ -10,8 +11,8 @@ import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# device = "cpu"
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = "cpu"
 
 # uncomment this and add .to(device) after agent_policy
 #  if sending agent_policy to GPU, it actually made it slower...
@@ -21,11 +22,24 @@ writer = SummaryWriter()
 
 
 class Memory:
-    def __init__(self):
-        self.states = torch.Tensor().to(device)
-        self.actions = torch.Tensor().to(device)
-        self.logprobs = torch.Tensor().to(device)
-        self.disReturn = torch.Tensor().to(device)
+    def __init__(self, timestep, num_agents, state_dim):
+        self.timestep = timestep
+        self.status = torch.tensor([0]).to(device).share_memory_()
+        self.states = torch.zeros(
+            (timestep*num_agents, state_dim)).to(device).share_memory_()
+        self.actions = torch.zeros(
+            timestep*num_agents).to(device).share_memory_()
+        self.logprobs = torch.zeros(
+            timestep*num_agents).to(device).share_memory_()
+        self.disReturn = torch.zeros(
+            timestep*num_agents).to(device).share_memory_()
+
+    def clear_memory(self):
+        self.status[:] = 0
+        self.states[:] = 0
+        self.actions[:] = 0
+        self.logprobs[:] = 0
+        self.disReturn[:] = 0
 
 
 class ActorCritic(nn.Module):
@@ -64,15 +78,29 @@ class ActorCritic(nn.Module):
                               for gym environment
                 log_prob (tensor): a tensor that contains the log probability
                                    of the action taken. require_grad is true
-
-
         """
+
         state = torch.from_numpy(state).float().to(device)
         action_probs = self.action_layer(state)
         dist = Categorical(action_probs)
         action = dist.sample()
 
-        return (action.item(), dist.log_prob(action))
+        return action.item(), dist.log_prob(action)
+
+    def evaluate(self, state, action):
+        # TODO verify this code if it works
+        action_probs = self.action_layer(state)
+        dist = Categorical(action_probs)
+
+        dist_entropy = dist.entropy()
+
+        # why are we getting the log prob here?
+        # the loss function used by PPO doesn't include a log term
+        action_logprobs = dist.log_prob(action)
+
+        state_value = self.value_layer(state)
+
+        return action_logprobs, torch.squeeze(state_value), dist_entropy
 
 
 class PPO:
@@ -107,9 +135,10 @@ class PPO:
         self.MseLoss = nn.MSELoss()
 
     def update(self, memory):
+        # TODO verify if this code works
         old_states = memory.states.detach()
-        old_actions = memory.old_actions.detach()
-        old_logprobs = memory.old_logprobs.detach()
+        old_actions = memory.actions.detach()
+        old_logprobs = memory.logprobs.detach()
         old_disReturn = memory.disReturn.detach()
 
         old_disReturn = (old_disReturn - old_disReturn.mean()) / \
@@ -168,7 +197,7 @@ class ParallelAgents:
        a shared memory.
     """
 
-    def __init__(self, num_agent, env_name, timestep, gamma,
+    def __init__(self, memory, num_agent, env_name, timestep, gamma,
                  state_dim, action_dim, n_latent_var,
                  seed=None, render=False):
         """creates instances of parallel agents here for
@@ -194,7 +223,8 @@ class ParallelAgents:
         # the policy which the parallel agents will act on
         self.agent_policy = ActorCritic(
             state_dim, action_dim, n_latent_var).to(device)
-        self.memory = Memory()
+        # TODO verify memory sharing if working
+        self.memory = memory
         self.timestep = timestep
         self.gamma = gamma
         self.agents = []
@@ -236,19 +266,29 @@ class ParallelAgents:
             discounted_reward = reward + (self.gamma*discounted_reward)
             disReturnTensor.insert(0, discounted_reward)
 
-        disReturnTensor = torch.tensor(disReturnTensor)
+        disReturnTensor = torch.tensor(disReturnTensor).float().to(device)
 
-        return (stateTensor, actionTensor, logprobTensor, disReturnTensor)
+        return stateTensor, actionTensor, logprobTensor, disReturnTensor
 
-    def combine_experience(self, result):
-        pass
+    def add_experience_to_pool(self, stateTensor, actionTensor,
+                               logprobTensor, disReturnTensor):
 
-    def env_step(self, agent):
+        position = self.memory.status.item()
+        increment = position + self.memory.timestep
+
+        self.memory.states[position:increment] = stateTensor
+        self.memory.actions[position:increment] = actionTensor
+        self.memory.logprobs[position:increment] = logprobTensor
+        self.memory.disReturn[position:increment] = disReturnTensor
+        self.memory.status.add_(self.memory.timestep)
+
+    def env_step(self, agent, lock):
         """having an agent to take a step in the environment. This function is
         made so it can be used for parallel agents
         Args:
             agent (obj Agent): the agent object for taking actions
         """
+        # TODO remove lock in the future if its not going to be used
         actions = []
         rewards = []
         states = []
@@ -259,7 +299,7 @@ class ParallelAgents:
 
         for t in range(self.timestep):
 
-            (action, logprob) = self.agent_policy.act(state)
+            action, logprob = self.agent_policy.act(state)
             state, reward, done, _ = agent.env.step(action)
 
             # save reward and environment state into memory
@@ -269,6 +309,13 @@ class ParallelAgents:
             logprobs.append(logprob)
             is_terminal.append(done)
 
+            # TODO remove this section after debugging finished
+            # states.append([agent.agent_id for i in range(8)])
+            # actions.append(agent.agent_id)
+            # rewards.append(agent.agent_id)
+            # logprobs.append(agent.agent_id)
+            # is_terminal.append(done)
+
             if done:
                 state = agent.env.reset()
 
@@ -276,43 +323,33 @@ class ParallelAgents:
                 agent.env.render()
 
         # convert the experience collected into memory
-        (stateTensor, actionTensor, logprobTensor, disReturnTensor) = \
+        stateTensor, actionTensor, logprobTensor, disReturnTensor = \
             self.experience_to_tensor(
-            states, actions, rewards, logprobs, is_terminal)
+                states, actions, rewards, logprobs, is_terminal)
 
-        del states[:]
-        del rewards[:]
-        del actions[:]
-        del logprobs[:]
-
-        memory = Memory()
-        memory.states = stateTensor
-        memory.actions = actionTensor
-        memory.logprobs = logprobTensor
-        memory.disReturn = disReturnTensor
+        self.add_experience_to_pool(
+            stateTensor, actionTensor, logprobTensor, disReturnTensor)
 
         print("Agent {} took {} steps, Worker process ID {}".
               format(agent.agent_id, self.timestep, os.getpid()))
-        return memory
+        # return memory
 
-    def parallelAct(self):
+    def parallelAct(self, render):
         """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
-        # FIXME: make memory sharing work
+        self.memory.clear_memory()
         p = mp.Pool()
-        pooledMemory = p.map(self.env_step, self.agents)
-        for memory in pooledMemory:
-            self.memory.states = torch.cat(
-                (self.memory.states, memory.states.to(device)))
-            self.memory.actions = torch.cat(
-                (self.memory.actions, memory.actions.to(device)))
-            self.memory.logprobs = torch.cat(
-                (self.memory.logprobs, memory.logprobs.to(device)))
-            self.memory.disReturn = torch.cat(
-                (self.memory.disReturn, memory.disReturn.to(device)))
+        lock = mp.Lock()
+        processes = []
+        for agent in self.agents:
+            p = mp.Process(target=self.env_step, args=(agent, lock))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
 
-        return self.memory
+        self.render = render
 
 
 def main():
@@ -322,9 +359,9 @@ def main():
     env_name = "LunarLander-v2"
     num_agent = 4
     render = False
-    timestep = 5
+    timestep = 2000
     seed = None
-    training_iter = 1000       # total number of training episodes
+    training_iter = 50       # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
@@ -348,8 +385,11 @@ def main():
     ppo = PPO(state_dim, action_dim, n_latent_var,
               lr, betas, gamma, K_epochs, eps_clip)
 
+    # preallocating shared memory object
+    memory = Memory(timestep, num_agent, state_dim)
+
     # initialize parallel agent intance
-    agents = ParallelAgents(num_agent, env_name, timestep,
+    agents = ParallelAgents(memory, num_agent, env_name, timestep,
                             gamma, state_dim, action_dim,
                             n_latent_var, seed, render)
 
@@ -362,20 +402,17 @@ def main():
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        pooledMemory = agents.parallelAct()
+        agents.parallelAct(render)
 
         # update the policy with the memories collected from the agents
-        ppo.update(pooledMemory)
-
-
-
+        ppo.update(memory)
 
         train_end = time.perf_counter()
         print("Training iteration {} done, {:.2f} sec elapsed".
               format(i, train_end-train_start))
 
-        
-
+        if i > 40:
+            render = True
     end = time.perf_counter()
     print("Training Completed, {:.2f} sec elapsed".format(end-start))
 
