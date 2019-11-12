@@ -1,7 +1,9 @@
-
+# TODO: test if code is faster with CPU or GPU
+# TODO: see how to use FP16 instead of FP32
 import os
 import gym
 import time
+from itertools import repeat
 import torch
 import torch.nn as nn
 import torch.multiprocessing as mp
@@ -11,20 +13,19 @@ from torch.utils.tensorboard import SummaryWriter
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 device = "cpu"
 
-
 # uncomment this and add .to(device) after agent_policy
 #  if sending agent_policy to GPU, it actually made it slower...
-# TODO: test if code is faster with CPU or GPU
+
 mp.set_start_method('spawn', True)
 writer = SummaryWriter()
 
 
 class Memory:
     def __init__(self):
-        self.actions = torch.Tensor().share_memory_()
-        self.states = torch.Tensor().share_memory_()
-        self.logprobs = torch.Tensor().share_memory_()
-        self.disReturns = torch.Tensor().share_memory_()
+        self.actions = torch.zeros(10).share_memory_().to(device)
+        self.states = torch.zeros(10).share_memory_().to(device)
+        self.logprobs = torch.zeros(10).share_memory_().to(device)
+        self.disReturns = torch.zeros(10).share_memory_().to(device)
 
     def clear_memory(self):
         pass
@@ -143,7 +144,7 @@ class ParallelAgents:
        a shared memory.
     """
 
-    def __init__(self, num_agent, env_name, timestep, gamma,
+    def __init__(self, memory_state, num_agent, env_name, timestep, gamma,
                  state_dim, action_dim, n_latent_var,
                  seed=None, render=False):
         """creates instances of parallel agents here for
@@ -167,7 +168,8 @@ class ParallelAgents:
         """
         assert num_agent > 0, "Number of agents must be positive"
         # TODO: is memory actually being shared?
-        self.memory = Memory()
+        self.memory = memory_state
+        print("memory is shared: {}".format(self.memory.is_shared()))
         # the policy which the parallel agents will act on
         self.agent_policy = ActorCritic(
             state_dim, action_dim, n_latent_var).to(device)
@@ -177,64 +179,6 @@ class ParallelAgents:
         for agent_id in range(num_agent):
             env = Agent(agent_id, env_name=env_name, seed=seed, render=render)
             self.agents.append(env)
-
-    def env_step(self, agent):
-        """having an agent to take a step in the environment. This function is
-        made so it can be used for parallel agents
-        Args:
-            agent (obj Agent): the agent object for taking actions
-        """
-        actions = []
-        rewards = []
-        states = []
-        logprobs = []
-        is_terminal = []
-
-        state = agent.env.reset()
-
-        for t in range(self.timestep):
-
-            (action, logprob) = self.agent_policy.act(state)
-            state, reward, done, _ = agent.env.step(action)
-
-            # save reward and environment state into memory
-            states.append(state)
-            actions.append(action)
-            rewards.append(reward)
-            logprobs.append(logprob)
-            is_terminal.append(done)
-
-            if done:
-                state = agent.env.reset()
-
-            if agent.render:
-                agent.env.render()
-
-        # convert the experience collected into memory
-        (stateTensor, actionTensor, logprobTensor, disReturnTensor) = \
-            self.experienceToTensor(
-            states, actions, rewards, logprobs, is_terminal)
-
-        # submit the collected experience into shared memory
-        self.memory.logprobs = torch.cat(
-            (self.memory.logprobs, logprobTensor))
-        self.memory.disReturns = torch.cat(
-            (self.memory.disReturns, disReturnTensor))
-        self.memory.actions = torch.cat((self.memory.actions, actionTensor))
-        self.memory.states = torch.cat((self.memory.states, stateTensor))
-
-        print("Agent {} took {} steps, Worker process ID {}".
-              format(agent.agent_id, self.timestep, os.getpid()))
-
-    def parallelAct(self):
-        """have each agent make an action using process pool. The result returned is a
-        concatnated list in the sequence of the process starting order
-        """
-
-        self.memory.clear_memory()
-        p = mp.Pool()
-        p.map(self.env_step, self.agents)
-        return self.memory
 
     def experienceToTensor(self, states, actions, rewards,
                            logprobs, is_terminal):
@@ -256,9 +200,9 @@ class ParallelAgents:
         """
 
         # convert state, action and log prob into tensor
-        stateTensor = torch.tensor(states)
-        actionTensor = torch.tensor(actions)
-        logprobTensor = torch.tensor(logprobs)
+        stateTensor = torch.tensor(states).float().to(device)
+        actionTensor = torch.tensor(actions).float().to(device)
+        logprobTensor = torch.tensor(logprobs).float().to(device)
 
         # convert reward into discounted return
         discounted_reward = 0
@@ -274,6 +218,98 @@ class ParallelAgents:
 
         return (stateTensor, actionTensor, logprobTensor, disReturnTensor)
 
+    def env_step(self, agent, memory):
+        """having an agent to take a step in the environment. This function is
+        made so it can be used for parallel agents
+        Args:
+            agent (obj Agent): the agent object for taking actions
+        """
+        actions = []
+        rewards = []
+        states = []
+        logprobs = []
+        is_terminal = []
+
+        state = agent.env.reset()
+
+        for t in range(self.timestep):
+
+            (action, logprob) = self.agent_policy.act(state)
+            state, reward, done, _ = agent.env.step(action)
+
+            # save reward and environment state into memory
+            # states.append(state)
+            # actions.append(action)
+            # rewards.append(reward)
+            # logprobs.append(logprob)
+            # is_terminal.append(done)
+
+            states.append(agent.agent_id)
+            actions.append(agent.agent_id)
+            rewards.append(agent.agent_id)
+            logprobs.append(agent.agent_id)
+            is_terminal.append(done)
+
+            if done:
+                state = agent.env.reset()
+
+            if agent.render:
+                agent.env.render()
+
+        # convert the experience collected into memory
+        (stateTensor, actionTensor, logprobTensor, disReturnTensor) = \
+            self.experienceToTensor(
+            states, actions, rewards, logprobs, is_terminal)
+
+        # submit the collected experience into shared memory
+        # self.memory.logprobs = torch.cat(
+        #     (self.memory.logprobs, logprobTensor))
+        # self.memory.disReturns = torch.cat(
+        #     (self.memory.disReturns, disReturnTensor))
+        # self.memory.actions = torch.cat((self.memory.actions, actionTensor))
+        # self.memory.states = torch.cat((self.memory.states, stateTensor))
+        # self.memory.logprobs = self.memory.logprobs+1
+        # self.memory.actions = self.memory.actions+1
+        # self.memory.states = self.memory.states+1
+        # self.memory.disReturns = self.memory.disReturns+1
+
+        memory = memory+1
+        print("Agent {} memory: {}".format(agent.agent_id, memory))
+        print("Agent {} memory is shared: {}".format(
+            agent.agent_id, memory.is_shared()))
+
+        self.memory = self.memory+1
+        print("Agent {} self memory: {}".format(agent.agent_id, self.memory))
+        print("Agent {} self memory is shared: {}".format(
+            agent.agent_id, self.memory.is_shared()))
+
+        print("Agent {} took {} steps, Worker process ID {}".
+              format(agent.agent_id, self.timestep, os.getpid()))
+        return memory
+
+    def parallelAct(self):
+        """have each agent make an action using process pool. The result returned is a
+        concatnated list in the sequence of the process starting order
+        """
+        # FIXME: make memory sharing work
+        # self.memory.clear_memory()
+        memory = torch.zeros(10).share_memory_().to(device)
+        p = mp.Pool()
+        p.starmap(self.env_step, zip(self.agents, repeat(memory)))
+
+        # return self.memory
+
+        # processes = []
+        # for agent in self.agents:
+        #     p = mp.Process(target=self.env_step, args=(agent, self.memory))
+        #     p.start()
+        #     processes.append(p)
+        # for p in processes:
+        #     p.join()
+
+        print("mainprocess: {}".format(memory))
+        # return self.memory
+
 
 def main():
 
@@ -281,7 +317,7 @@ def main():
     env_name = "LunarLander-v2"
     num_agent = 4
     render = False
-    timestep = 2000
+    timestep = 1000
     seed = None
     training_iter = 1        # total number of training episodes
 
@@ -305,10 +341,14 @@ def main():
     ppo = PPO(state_dim, action_dim, n_latent_var,
               lr, betas, gamma, K_epochs, eps_clip)
 
+    # initialize memory object
+    memory = Memory()
+    memory_state = torch.zeros(10).share_memory_().to(device)
+
     # initialize parallel agent intance
-    agents = ParallelAgents(num_agent, env_name, timestep, gamma,
-                            state_dim, action_dim, n_latent_var,
-                            seed, render)
+    agents = ParallelAgents(memory_state, num_agent, env_name, timestep,
+                            gamma, state_dim, action_dim,
+                            n_latent_var, seed, render)
 
     for i in range(1, training_iter+1):
 
@@ -319,8 +359,10 @@ def main():
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        memory = agents.parallelAct()
-
+        agents.parallelAct()
+        print("-----------")
+        print(memory_state)
+        print("-----------")
         # update the policy with the memories collected from the agents
         ppo.update(memory)
         train_end = time.perf_counter()
