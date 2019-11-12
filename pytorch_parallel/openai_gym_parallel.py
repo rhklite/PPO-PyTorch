@@ -107,10 +107,43 @@ class PPO:
         self.MseLoss = nn.MSELoss()
 
     def update(self, memory):
-        # TODO: implement policy updaaate
-        # requires state, action, reward, old_logprob, all of which are
-        # 1D tensors
-        pass
+        old_states = memory.states.detach()
+        old_actions = memory.old_actions.detach()
+        old_logprobs = memory.old_logprobs.detach()
+        old_disReturn = memory.disReturn.detach()
+
+        old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+            (old_disReturn.std()+1e-5)
+
+        for _ in range(self.K_epochs):
+            # Evaluating old actions and values:
+            logprobs, state_values, dist_entropy = self.policy.evaluate(
+                old_states, old_actions)
+
+            # Finding the ratio (pi_theta/ pi_theta_old):
+            # using exponential returns the log back to non-log version
+            ratios = torch.exp(logprobs - old_logprobs.detach())
+
+            # Finding the surrogate loss:
+            advantages = old_disReturn - state_values.detach()
+            surr1 = ratios * advantages
+            surr2 = torch.clamp(ratios, 1-self.eps_clip,
+                                1+self.eps_clip)*advantages
+
+            # see paper for this loss formulation; this loss function
+            # need to be used if the policy and value network shares
+            # parameters, however, i think the author of this code just used
+            # this, even though the two network are not sharing parameters
+            loss = -torch.min(surr1, surr2) + 0.5 * \
+                self.MseLoss(state_values, old_disReturn) - 0.01*dist_entropy
+
+            # take gradient step
+            self.optimizer.zero_grad()
+            loss.mean().backward()
+            self.optimizer.step()
+
+        # copy new weights into old policy:
+        self.policy_old.load_state_dict(self.policy.state_dict())
 
 
 class Agent:
@@ -284,19 +317,21 @@ class ParallelAgents:
 
 def main():
 
+    ######################################
     # Training Environment configuration
     env_name = "LunarLander-v2"
     num_agent = 4
     render = False
     timestep = 5
     seed = None
-    training_iter = 1        # total number of training episodes
+    training_iter = 1000       # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
     state_dim = tmp_env.observation_space.shape[0]
     action_dim = tmp_env.action_space.n
     del tmp_env
+
     # PPO & Network Parameters
     n_latent_var = 64
     lr = 0.002
@@ -304,6 +339,7 @@ def main():
     gamma = 0.99
     K_epochs = 4
     eps_clip = 0.2
+    ######################################
 
     # timer to see time it took to train
     start = time.perf_counter()
@@ -328,13 +364,17 @@ def main():
         # memory is the returned experience from all agents
         pooledMemory = agents.parallelAct()
 
-        print(pooledMemory.actions)
         # update the policy with the memories collected from the agents
         ppo.update(pooledMemory)
-        train_end = time.perf_counter()
 
+
+
+
+        train_end = time.perf_counter()
         print("Training iteration {} done, {:.2f} sec elapsed".
               format(i, train_end-train_start))
+
+        
 
     end = time.perf_counter()
     print("Training Completed, {:.2f} sec elapsed".format(end-start))
