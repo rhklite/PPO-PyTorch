@@ -1,6 +1,7 @@
 # TODO: test if code is faster with CPU or GPU
 # TODO: see how to use FP16 instead of FP32
 # TODO: remove unnecessary .to(device) to save memory
+# FIXME: rewrite multiprocessing step to stop memory leak
 import os
 import gym
 import time
@@ -252,9 +253,9 @@ class ParallelAgents:
         """
 
         # convert state, action and log prob into tensor
-        stateTensor = torch.tensor(states).float().to(device)
-        actionTensor = torch.tensor(actions).float().to(device)
-        logprobTensor = torch.tensor(logprobs).float().to(device)
+        stateTensor = torch.tensor(states).float()
+        actionTensor = torch.tensor(actions).float()
+        logprobTensor = torch.tensor(logprobs).float()
 
         # convert reward into discounted return
         discounted_reward = 0
@@ -266,7 +267,7 @@ class ParallelAgents:
             discounted_reward = reward + (self.gamma*discounted_reward)
             disReturnTensor.insert(0, discounted_reward)
 
-        disReturnTensor = torch.tensor(disReturnTensor).float().to(device)
+        disReturnTensor = torch.tensor(disReturnTensor).float()
 
         return stateTensor, actionTensor, logprobTensor, disReturnTensor
 
@@ -282,7 +283,7 @@ class ParallelAgents:
         self.memory.disReturn[position:increment] = disReturnTensor
         self.memory.status.add_(self.memory.timestep)
 
-    def env_step(self, agent, lock):
+    def env_step(self, agent):
         """having an agent to take a step in the environment. This function is
         made so it can be used for parallel agents
         Args:
@@ -330,26 +331,34 @@ class ParallelAgents:
         self.add_experience_to_pool(
             stateTensor, actionTensor, logprobTensor, disReturnTensor)
 
+        # free up memory
+        del actions, rewards, states, logprobs, is_terminal
+        del stateTensor, actionTensor, logprobTensor, disReturnTensor
+
         print("Agent {} took {} steps, Worker process ID {}".
               format(agent.agent_id, self.timestep, os.getpid()))
         # return memory
 
-    def parallelAct(self, render):
+    def parallelAct(self):
         """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
         self.memory.clear_memory()
-        p = mp.Pool()
-        lock = mp.Lock()
+        # p = mp.Pool()
+        # p.map(self.env_step, self.agents)
+        # del p
+        # p = mp.Pool()
         processes = []
         for agent in self.agents:
-            p = mp.Process(target=self.env_step, args=(agent, lock))
+            p = mp.Process(target=self.env_step, args=(agent,))
             p.start()
             processes.append(p)
         for p in processes:
             p.join()
-
-        self.render = render
+            # need to terminate process after they are done
+            # since new processes are spawned every training cycle.
+            # if not terminated, RAM will explode
+            p.terminate()
 
 
 def main():
@@ -361,7 +370,7 @@ def main():
     render = False
     timestep = 2000
     seed = None
-    training_iter = 50       # total number of training episodes
+    training_iter = 200      # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
@@ -402,7 +411,7 @@ def main():
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        agents.parallelAct(render)
+        agents.parallelAct()
 
         # update the policy with the memories collected from the agents
         ppo.update(memory)
@@ -411,9 +420,9 @@ def main():
         print("Training iteration {} done, {:.2f} sec elapsed".
               format(i, train_end-train_start))
 
-        if i > 40:
-            render = True
     end = time.perf_counter()
+    torch.save(ppo.policy.state_dict(),
+               './Parallel_PPO_{}.pth'.format(env_name))
     print("Training Completed, {:.2f} sec elapsed".format(end-start))
 
 

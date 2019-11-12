@@ -25,8 +25,8 @@ def test():
     render = True
     save_gif = False
 
-    filename = "PPO_{}.pth".format(env_name)
-    directory = "./preTrained/"
+    filename = "Parallel_PPO_{}.pth".format(env_name)
+    directory = "./"
     
     memory = Memory()
     ppo = PPO(state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip)
