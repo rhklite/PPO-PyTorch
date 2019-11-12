@@ -7,7 +7,7 @@ mp.set_start_method("spawn", True)
 
 
 def add_tensors(tensor):
-    tensor = tensor + 1
+    tensor.add_(1)
     print("process ID {}, Tensor: {}, shared: {}".format(
         os.getpid(), tensor, tensor.is_shared()))
 

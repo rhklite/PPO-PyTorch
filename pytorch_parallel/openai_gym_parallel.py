@@ -22,10 +22,10 @@ writer = SummaryWriter()
 
 class Memory:
     def __init__(self):
-        self.states = []
-        self.actions = []
-        self.logprobs = []
-        self.disReturn = []
+        self.states = torch.Tensor().to(device)
+        self.actions = torch.Tensor().to(device)
+        self.logprobs = torch.Tensor().to(device)
+        self.disReturn = torch.Tensor().to(device)
 
 
 class ActorCritic(nn.Module):
@@ -252,15 +252,15 @@ class ParallelAgents:
         del actions[:]
         del logprobs[:]
 
-        # memory.states.append(stateTensor)
-        # memory.actions.append(actionTensor)
-        # memory.logprobs.append(logprobTensor)
-        # memory.disReturn.append(disReturnTensor)
+        memory = Memory()
+        memory.states = stateTensor
+        memory.actions = actionTensor
+        memory.logprobs = logprobTensor
+        memory.disReturn = disReturnTensor
 
         print("Agent {} took {} steps, Worker process ID {}".
               format(agent.agent_id, self.timestep, os.getpid()))
-        # return memory
-        return (stateTensor, actionTensor, logprobTensor, disReturnTensor)
+        return memory
 
     def parallelAct(self):
         """have each agent make an action using process pool. The result returned is a
@@ -268,23 +268,18 @@ class ParallelAgents:
         """
         # FIXME: make memory sharing work
         p = mp.Pool()
-        # (state, action, logprob, disReturn) = p.starmap(
-        #     self.env_step, zip(self.agents, repeat(self.memory)))
-        result = p.map(self.env_step, self.agents)
-        print(result[0][0])
-        print(result[0][1])
-        print(result[0][2])
-        print(result[0][3])
+        pooledMemory = p.map(self.env_step, self.agents)
+        for memory in pooledMemory:
+            self.memory.states = torch.cat(
+                (self.memory.states, memory.states.to(device)))
+            self.memory.actions = torch.cat(
+                (self.memory.actions, memory.actions.to(device)))
+            self.memory.logprobs = torch.cat(
+                (self.memory.logprobs, memory.logprobs.to(device)))
+            self.memory.disReturn = torch.cat(
+                (self.memory.disReturn, memory.disReturn.to(device)))
 
-        return 1
-        # pooledMemory = Memory()
-        # for result in results:
-        #     pooledMemory.states.append(result.states)
-        #     pooledMemory.actions.append(result.actions)
-        #     pooledMemory.logprobs.append(result.logprobs)
-        #     pooledMemory.disReturn.append(result.disReturn)
-
-        # return pooledMemory
+        return self.memory
 
 
 def main():
@@ -293,7 +288,7 @@ def main():
     env_name = "LunarLander-v2"
     num_agent = 4
     render = False
-    timestep = 1000
+    timestep = 5
     seed = None
     training_iter = 1        # total number of training episodes
 
@@ -331,10 +326,11 @@ def main():
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        agents.parallelAct()
+        pooledMemory = agents.parallelAct()
 
+        print(pooledMemory.actions)
         # update the policy with the memories collected from the agents
-        # ppo.update(pooledMemory)
+        ppo.update(pooledMemory)
         train_end = time.perf_counter()
 
         print("Training iteration {} done, {:.2f} sec elapsed".
