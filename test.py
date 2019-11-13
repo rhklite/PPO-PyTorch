@@ -20,13 +20,13 @@ def test():
     eps_clip = 0.2              # clip parameter for PPO
     #############################################
 
-    n_episodes = 3
+    n_episodes = 5
     max_timesteps = 300
     render = True
     save_gif = False
 
-    filename = "Parallel_PPO_{}.pth".format(env_name)
-    directory = "./"
+    filename = "Step140_R-11_LunarLander-v2.pth"
+    directory = "./parallel_results/"
     
     memory = Memory()
     ppo = PPO(state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip)

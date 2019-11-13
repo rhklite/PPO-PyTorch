@@ -229,6 +229,7 @@ class ParallelAgents:
         self.timestep = timestep
         self.gamma = gamma
         self.agents = []
+        self.render = render
         for agent_id in range(num_agent):
             env = Agent(agent_id, env_name=env_name, seed=seed, render=render)
             self.agents.append(env)
@@ -283,6 +284,9 @@ class ParallelAgents:
         self.memory.disReturn[position:increment] = disReturnTensor
         self.memory.status.add_(self.memory.timestep)
 
+    def log_progress(self, epoch_reward):
+        pass
+
     def env_step(self, agent):
         """having an agent to take a step in the environment. This function is
         made so it can be used for parallel agents
@@ -295,6 +299,10 @@ class ParallelAgents:
         states = []
         logprobs = []
         is_terminal = []
+
+        # variables for logging purpose
+        episode_reward = 0
+        epoch_reward = []
 
         state = agent.env.reset()
 
@@ -310,19 +318,22 @@ class ParallelAgents:
             logprobs.append(logprob)
             is_terminal.append(done)
 
-            # TODO remove this section after debugging finished
-            # states.append([agent.agent_id for i in range(8)])
-            # actions.append(agent.agent_id)
-            # rewards.append(agent.agent_id)
-            # logprobs.append(agent.agent_id)
-            # is_terminal.append(done)
+            # record episode reward for logging
+            episode_reward += reward
 
             if done:
                 state = agent.env.reset()
 
-            if agent.render:
-                agent.env.render()
+                # record episode reward for logging
+                epoch_reward.append(episode_reward)
+                episode_reward = 0
 
+            if self.render:
+                agent.env.render()
+            # if agent.render:
+            #     agent.env.render()
+
+        epoch_reward.append(episode_reward)
         # convert the experience collected into memory
         stateTensor, actionTensor, logprobTensor, disReturnTensor = \
             self.experience_to_tensor(
@@ -331,46 +342,62 @@ class ParallelAgents:
         self.add_experience_to_pool(
             stateTensor, actionTensor, logprobTensor, disReturnTensor)
 
-        # free up memory
-        del actions, rewards, states, logprobs, is_terminal
-        del stateTensor, actionTensor, logprobTensor, disReturnTensor
+        if len(epoch_reward) > 0:
+            epoch_reward = float(sum(epoch_reward))/float(len(epoch_reward))
+        else:
+            print(states[0:2])
+            print(actions[0:2])
+            print(rewards[0:2])
+            print(is_terminal[0:2])
 
-        print("Agent {} took {} steps, Worker process ID {}".
-              format(agent.agent_id, self.timestep, os.getpid()))
-        # return memory
+        print("Agent {} took {} steps, average reward {}".
+              format(agent.agent_id, self.timestep, epoch_reward))
+
+        return epoch_reward
 
     def parallelAct(self):
         """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
         self.memory.clear_memory()
-        # p = mp.Pool()
-        # p.map(self.env_step, self.agents)
-        # del p
-        # p = mp.Pool()
-        processes = []
-        for agent in self.agents:
-            p = mp.Process(target=self.env_step, args=(agent,))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            p.join()
-            # need to terminate process after they are done
-            # since new processes are spawned every training cycle.
-            # if not terminated, RAM will explode
-            p.terminate()
+
+        #############################
+        # pool method
+        p = mp.Pool()
+        epoch_reward = p.map(self.env_step, self.agents)
+        print("terminating process")
+        p.terminate()
+        return epoch_reward
+        #############################
+
+        #############################
+        # Regular method
+        # processes = []
+        # for agent in self.agents:
+        #     p = mp.Process(target=self.env_step, args=(agent,))
+        #     p.start()
+        #     processes.append(p)
+        # for p in processes:
+        #     print("process {} terminated".format(p))
+        #     p.join()
+        #     # need to terminate process after they are done
+        #     # since new processes are spawned every training cycle.
+        #     # if not terminated, RAM will explode
+        #     p.terminate()
+        #############################
 
 
 def main():
 
     ######################################
     # Training Environment configuration
-    env_name = "LunarLander-v2"
+    # env_name = "LunarLander-v2"
+    env_name = "CartPole-v0"
     num_agent = 4
     render = False
-    timestep = 2000
+    timestep = 300
     seed = None
-    training_iter = 200      # total number of training episodes
+    training_iter = 500      # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
@@ -411,8 +438,10 @@ def main():
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        agents.parallelAct()
-
+        epoch_reward = agents.parallelAct()
+        avg_reward = sum(epoch_reward)/len(epoch_reward)
+        # writer.add_scalar('Average Reward ', i,
+        #                   sum(epoch_reward)/len(epoch_reward))
         # update the policy with the memories collected from the agents
         ppo.update(memory)
 
@@ -420,9 +449,13 @@ def main():
         print("Training iteration {} done, {:.2f} sec elapsed".
               format(i, train_end-train_start))
 
+        if i % 20 == 0:
+            torch.save(ppo.policy.state_dict(),
+                       './parallel_results/Step{}_R{:1f}_{}.pth'
+                       .format(i, avg_reward, env_name))
+
     end = time.perf_counter()
-    torch.save(ppo.policy.state_dict(),
-               './Parallel_PPO_{}.pth'.format(env_name))
+
     print("Training Completed, {:.2f} sec elapsed".format(end-start))
 
 
