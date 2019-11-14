@@ -7,6 +7,8 @@
 #   fix attempt 1: pass in PPO object to act instead of load ppo state dict, didn't work
 #   fix: noticed the appended logprob has 1 offset. moved append after act, before env.step(action) in the env_step function
 #   big performance boost from that... wtf
+# FIXME: figure out why the training saturates...
+# 
 import os
 import gym
 import time
@@ -411,8 +413,8 @@ def main():
 
     ######################################
     # Training Environment configuration
-    env_name = "LunarLander-v2"
-    # env_name = "Ca"
+    # env_name = "LunarLander-v2"
+    env_name = "CartPole-v0"
     num_agent = 1
     render = False
     timestep = 2000
@@ -476,8 +478,8 @@ def main():
         # torch.save(ppo.policy.state_dict(),
         #            './parallel_results/Step{}_R{:1f}_{}.pth'
         #            .format(i, epoch_reward, env_name))
-        if epoch_reward > 200:
-            render = True
+        # if epoch_reward > 200:
+        #     render = True
     end = time.perf_counter()
 
     print("Training Completed, {:.2f} sec elapsed".format(end-start))

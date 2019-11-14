@@ -2,3 +2,4 @@
 runs/
 *.pyc
 __pycache__
+archive/
