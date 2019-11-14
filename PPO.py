@@ -176,7 +176,7 @@ def main():
     solved_reward = 230         # stop training if avg_reward > solved_reward
     log_interval = 20           # print avg reward in the interval
     max_episodes = 50000        # max training episodes
-    max_timesteps = 300         # max timesteps in one episode
+    max_timesteps = 2000         # max timesteps in one episode
     n_latent_var = 64           # number of variables in hidden layer
     update_timestep = 2000      # update policy every n timesteps
     lr = 0.002

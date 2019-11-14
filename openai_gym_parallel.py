@@ -142,6 +142,7 @@ class PPO:
         old_logprobs = memory.logprobs.detach()
         old_disReturn = memory.disReturn.detach()
 
+        # TODO: check if this is the right place to normalize reward
         old_disReturn = (old_disReturn - old_disReturn.mean()) / \
             (old_disReturn.std()+1e-5)
 
@@ -224,12 +225,14 @@ class ParallelAgents:
         # the policy which the parallel agents will act on
         self.agent_policy = ActorCritic(
             state_dim, action_dim, n_latent_var).to(device)
-        # TODO verify memory sharing if working
-        self.memory = memory
+        # parameters
         self.timestep = timestep
         self.gamma = gamma
-        self.agents = []
         self.render = render
+
+        # for multiprocessing
+        self.memory = memory
+        self.agents = []
         for agent_id in range(num_agent):
             env = Agent(agent_id, env_name=env_name, seed=seed, render=render)
             self.agents.append(env)
@@ -261,9 +264,9 @@ class ParallelAgents:
         # convert reward into discounted return
         discounted_reward = 0
         disReturnTensor = []
-        for reward, is_terminal in zip(reversed(rewards),
-                                       reversed(is_terminal)):
-            if is_terminal:
+        for reward, done in zip(reversed(rewards),
+                                reversed(is_terminal)):
+            if done:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma*discounted_reward)
             disReturnTensor.insert(0, discounted_reward)
@@ -273,7 +276,7 @@ class ParallelAgents:
         return stateTensor, actionTensor, logprobTensor, disReturnTensor
 
     def add_experience_to_pool(self, stateTensor, actionTensor,
-                               logprobTensor, disReturnTensor):
+                               logprobTensor, disReturnTensor, lock):
 
         position = self.memory.status.item()
         increment = position + self.memory.timestep
@@ -282,18 +285,19 @@ class ParallelAgents:
         self.memory.actions[position:increment] = actionTensor
         self.memory.logprobs[position:increment] = logprobTensor
         self.memory.disReturn[position:increment] = disReturnTensor
+        lock.acquire()
         self.memory.status.add_(self.memory.timestep)
+        lock.release()
 
     def log_progress(self, epoch_reward):
         pass
 
-    def env_step(self, agent):
+    def env_step(self, agent, lock):
         """having an agent to take a step in the environment. This function is
         made so it can be used for parallel agents
         Args:
             agent (obj Agent): the agent object for taking actions
         """
-        # TODO remove lock in the future if its not going to be used
         actions = []
         rewards = []
         states = []
@@ -309,13 +313,15 @@ class ParallelAgents:
         for t in range(self.timestep):
 
             action, logprob = self.agent_policy.act(state)
+
+            states.append(state)
+            actions.append(action)
+            logprobs.append(logprob)
+
             state, reward, done, _ = agent.env.step(action)
 
             # save reward and environment state into memory
-            states.append(state)
-            actions.append(action)
             rewards.append(reward)
-            logprobs.append(logprob)
             is_terminal.append(done)
 
             # record episode reward for logging
@@ -340,7 +346,7 @@ class ParallelAgents:
                 states, actions, rewards, logprobs, is_terminal)
 
         self.add_experience_to_pool(
-            stateTensor, actionTensor, logprobTensor, disReturnTensor)
+            stateTensor, actionTensor, logprobTensor, disReturnTensor, lock)
 
         if len(epoch_reward) > 0:
             epoch_reward = float(sum(epoch_reward))/float(len(epoch_reward))
@@ -355,16 +361,22 @@ class ParallelAgents:
 
         return epoch_reward
 
-    def parallelAct(self):
+    def parallelAct(self, n_iter, n_iter_render):
         """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
         self.memory.clear_memory()
 
+        if n_iter > n_iter_render:
+            self.render = True
+
         #############################
         # pool method
+
+        m = mp.Manager()
+        lock = m.Lock()
         p = mp.Pool()
-        epoch_reward = p.map(self.env_step, self.agents)
+        epoch_reward = p.starmap(self.env_step, zip(self.agents, repeat(lock)))
         print("terminating process")
         p.terminate()
         return epoch_reward
@@ -393,11 +405,11 @@ def main():
     # Training Environment configuration
     # env_name = "LunarLander-v2"
     env_name = "CartPole-v0"
-    num_agent = 4
-    render = False
-    timestep = 300
+    num_agent = 1
+    render = True
+    timestep = 100
     seed = None
-    training_iter = 500      # total number of training episodes
+    training_iter = 40      # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
@@ -438,7 +450,7 @@ def main():
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        epoch_reward = agents.parallelAct()
+        epoch_reward = agents.parallelAct(i, 20)
         avg_reward = sum(epoch_reward)/len(epoch_reward)
         # writer.add_scalar('Average Reward ', i,
         #                   sum(epoch_reward)/len(epoch_reward))

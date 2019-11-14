@@ -246,13 +246,13 @@ class PPO:
 
 def main():
     # Hyperparameters
-    env_name = "LunarLander-v2"
+    env_name = "CartPole-v0"
     # creating environment
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
-    action_dim = 4
+    action_dim = 2
     render = False
-    solved_reward = 230         # stop training if avg_reward > solved_reward
+    solved_reward = 200         # stop training if avg_reward > solved_reward
     log_interval = 20           # print avg reward in the interval
     max_episodes = 50000        # max training episodes
     max_timesteps = 300         # max timesteps in one episode

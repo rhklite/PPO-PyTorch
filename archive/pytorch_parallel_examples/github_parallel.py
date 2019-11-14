@@ -66,7 +66,7 @@ class ParallelEnvironment(object):
 num_envs = 4
 p_env = ParallelEnvironment("LunarLander-v2", num_envs)
 action_space = p_env.get_action_space()
-for i in range(100):
+for i in range(1000000):
     actions = [action_space.sample() for _ in range(num_envs)]
     obs, rwds, dones = p_env.step(actions)
     print(obs[0].shape)

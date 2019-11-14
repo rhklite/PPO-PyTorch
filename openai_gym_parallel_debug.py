@@ -2,6 +2,11 @@
 # TODO: see how to use FP16 instead of FP32
 # TODO: remove unnecessary .to(device) to save memory
 # FIXME: rewrite multiprocessing step to stop memory leak
+# MAJOR CHANGE 1: removed parallel processing, only 1 agent, directly used func: env_step(). no improvement
+# Major change 2: noticed difference in the ratio calculated in the first update cycle against the baseline code (resolved)
+#   fix attempt 1: pass in PPO object to act instead of load ppo state dict, didn't work
+#   fix: noticed the appended logprob has 1 offset. moved append after act, before env.step(action) in the env_step function
+#   big performance boost from that... wtf
 import os
 import gym
 import time
@@ -18,7 +23,7 @@ device = "cpu"
 # uncomment this and add .to(device) after agent_policy
 #  if sending agent_policy to GPU, it actually made it slower...
 
-mp.set_start_method('spawn', True)
+# mp.set_start_method('spawn', True)
 writer = SummaryWriter()
 
 
@@ -104,6 +109,23 @@ class ActorCritic(nn.Module):
         return action_logprobs, torch.squeeze(state_value), dist_entropy
 
 
+class Agent:
+    """creating a single agent, which contains the agent's gym environment
+    and relevant information, such as its ID
+    """
+
+    def __init__(self, agent_id, env_name, seed=None, render=False):
+        self.render = render
+        self.env_name = env_name
+        self.seed = seed
+        self.agent_id = agent_id
+
+        self.env = gym.make(self.env_name)
+        self.env.reset()
+        self.env.seed(None)
+        print("Agent {} initialized".format(agent_id))
+
+
 class PPO:
     def __init__(self, state_dim, action_dim, n_latent_var, lr, betas, gamma,
                  K_epochs, eps_clip):
@@ -142,6 +164,8 @@ class PPO:
         old_logprobs = memory.logprobs.detach()
         old_disReturn = memory.disReturn.detach()
 
+        # TODO: check if this is the right place to normalize reward
+        # TODO: the normalized discounted reward is ~10 times larger than baseline code... weird might be cause of not learning?
         old_disReturn = (old_disReturn - old_disReturn.mean()) / \
             (old_disReturn.std()+1e-5)
 
@@ -152,6 +176,7 @@ class PPO:
 
             # Finding the ratio (pi_theta/ pi_theta_old):
             # using exponential returns the log back to non-log version
+            # TODO this ratio looks really weird, baseline code is all 1, which should be correct. If this ratio is not 1, it means the acting policy and the current policy does not have the same network parameters
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
             # Finding the surrogate loss:
@@ -174,23 +199,6 @@ class PPO:
 
         # copy new weights into old policy:
         self.policy_old.load_state_dict(self.policy.state_dict())
-
-
-class Agent:
-    """creating a single agent, which contains the agent's gym environment
-    and relevant information, such as its ID
-    """
-
-    def __init__(self, agent_id, env_name, seed=None, render=False):
-        self.render = render
-        self.env_name = env_name
-        self.seed = seed
-        self.agent_id = agent_id
-
-        self.env = gym.make(self.env_name)
-        self.env.reset()
-        self.env.seed(None)
-        print("Agent {} initialized".format(agent_id))
 
 
 class ParallelAgents:
@@ -221,15 +229,17 @@ class ParallelAgents:
             render (bool): whether to render the gym environment as it trains
         """
         assert num_agent > 0, "Number of agents must be positive"
-        # the policy which the parallel agents will act on
-        self.agent_policy = ActorCritic(
-            state_dim, action_dim, n_latent_var).to(device)
-        # TODO verify memory sharing if working
-        self.memory = memory
+        # # the policy which the parallel agents will act on
+        # self.agent_policy = ActorCritic(
+        #     state_dim, action_dim, n_latent_var).to(device)
+        # parameters
         self.timestep = timestep
         self.gamma = gamma
-        self.agents = []
         self.render = render
+
+        # for multiprocessing
+        self.memory = memory
+        self.agents = []
         for agent_id in range(num_agent):
             env = Agent(agent_id, env_name=env_name, seed=seed, render=render)
             self.agents.append(env)
@@ -256,14 +266,14 @@ class ParallelAgents:
         # convert state, action and log prob into tensor
         stateTensor = torch.tensor(states).float()
         actionTensor = torch.tensor(actions).float()
-        logprobTensor = torch.tensor(logprobs).float()
+        logprobTensor = torch.tensor(logprobs).float().detach()
 
         # convert reward into discounted return
         discounted_reward = 0
         disReturnTensor = []
-        for reward, is_terminal in zip(reversed(rewards),
-                                       reversed(is_terminal)):
-            if is_terminal:
+        for reward, done in zip(reversed(rewards),
+                                reversed(is_terminal)):
+            if done:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma*discounted_reward)
             disReturnTensor.insert(0, discounted_reward)
@@ -282,18 +292,19 @@ class ParallelAgents:
         self.memory.actions[position:increment] = actionTensor
         self.memory.logprobs[position:increment] = logprobTensor
         self.memory.disReturn[position:increment] = disReturnTensor
+        # lock.acquire()
         self.memory.status.add_(self.memory.timestep)
+        # lock.release()
 
     def log_progress(self, epoch_reward):
         pass
 
-    def env_step(self, agent):
+    def env_step(self, agent, ppo, render):
         """having an agent to take a step in the environment. This function is
         made so it can be used for parallel agents
         Args:
             agent (obj Agent): the agent object for taking actions
         """
-        # TODO remove lock in the future if its not going to be used
         actions = []
         rewards = []
         states = []
@@ -308,14 +319,16 @@ class ParallelAgents:
 
         for t in range(self.timestep):
 
-            action, logprob = self.agent_policy.act(state)
+            action, logprob = ppo.policy_old.act(state)
+
+            states.append(state)
+            actions.append(action)
+            logprobs.append(logprob)
+
             state, reward, done, _ = agent.env.step(action)
 
             # save reward and environment state into memory
-            states.append(state)
-            actions.append(action)
             rewards.append(reward)
-            logprobs.append(logprob)
             is_terminal.append(done)
 
             # record episode reward for logging
@@ -328,7 +341,8 @@ class ParallelAgents:
                 epoch_reward.append(episode_reward)
                 episode_reward = 0
 
-            if self.render:
+            if render:
+                time.sleep(0.001)
                 agent.env.render()
             # if agent.render:
             #     agent.env.render()
@@ -350,21 +364,27 @@ class ParallelAgents:
             print(rewards[0:2])
             print(is_terminal[0:2])
 
-        print("Agent {} took {} steps, average reward {}".
-              format(agent.agent_id, self.timestep, epoch_reward))
+        # print("Agent {} took {} steps, average reward {}".
+        #       format(agent.agent_id, self.timestep, epoch_reward))
 
         return epoch_reward
 
-    def parallelAct(self):
+    def parallelAct(self, n_iter, n_iter_render):
         """have each agent make an action using process pool. The result returned is a
         concatnated list in the sequence of the process starting order
         """
         self.memory.clear_memory()
 
+        if n_iter > n_iter_render:
+            self.render = True
+
         #############################
         # pool method
+
+        m = mp.Manager()
+        lock = m.Lock()
         p = mp.Pool()
-        epoch_reward = p.map(self.env_step, self.agents)
+        epoch_reward = p.starmap(self.env_step, zip(self.agents, repeat(lock)))
         print("terminating process")
         p.terminate()
         return epoch_reward
@@ -391,13 +411,13 @@ def main():
 
     ######################################
     # Training Environment configuration
-    # env_name = "LunarLander-v2"
-    env_name = "CartPole-v0"
-    num_agent = 4
+    env_name = "LunarLander-v2"
+    # env_name = "Ca"
+    num_agent = 1
     render = False
-    timestep = 300
+    timestep = 2000
     seed = None
-    training_iter = 500      # total number of training episodes
+    training_iter = 2000      # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
@@ -429,34 +449,42 @@ def main():
                             gamma, state_dim, action_dim,
                             n_latent_var, seed, render)
 
+    train_start = time.perf_counter()
     for i in range(1, training_iter+1):
 
-        train_start = time.perf_counter()
+        memory.clear_memory()
 
         # making a copy of the actor for the parallel agents
-        agents.agent_policy.load_state_dict(ppo.policy_old.state_dict())
+        # agents.agent_policy.load_state_dict(ppo.policy_old.state_dict())
 
         # tell all the parallel agents to act according to the policy
         # memory is the returned experience from all agents
-        epoch_reward = agents.parallelAct()
-        avg_reward = sum(epoch_reward)/len(epoch_reward)
+        epoch_reward = agents.env_step(agents.agents[0], ppo, render)
+        # epoch_reward = agents.parallelAct(i, 20)
+        # avg_reward = sum(epoch_reward)/len(epoch_reward)
         # writer.add_scalar('Average Reward ', i,
         #                   sum(epoch_reward)/len(epoch_reward))
         # update the policy with the memories collected from the agents
         ppo.update(memory)
 
-        train_end = time.perf_counter()
-        print("Training iteration {} done, {:.2f} sec elapsed".
-              format(i, train_end-train_start))
-
         if i % 20 == 0:
-            torch.save(ppo.policy.state_dict(),
-                       './parallel_results/Step{}_R{:1f}_{}.pth'
-                       .format(i, avg_reward, env_name))
 
+            train_end = time.perf_counter()
+            print("Training {} done, {:.2f} sec elapsed, reward {}".
+                  format(i, train_end-train_start, epoch_reward))
+            train_start = time.perf_counter()
+        # torch.save(ppo.policy.state_dict(),
+        #            './parallel_results/Step{}_R{:1f}_{}.pth'
+        #            .format(i, epoch_reward, env_name))
+        if epoch_reward > 200:
+            render = True
     end = time.perf_counter()
 
     print("Training Completed, {:.2f} sec elapsed".format(end-start))
+
+    torch.save(ppo.policy.state_dict(),
+                './parallel_results/Step{}_R{:1f}_{}.pth'
+                .format(i, epoch_reward, env_name))
 
 
 if __name__ == "__main__":
