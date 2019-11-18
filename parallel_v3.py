@@ -1,4 +1,5 @@
 # TODO: test if code is faster with CPU or GPU
+import os
 import gym
 import time
 import torch
@@ -7,8 +8,8 @@ import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-# device = "cpu"
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = "cpu"
 
 # uncomment this and add .to(device) after agent_policy
 #  if sending agent_policy to GPU, it actually made it slower...
@@ -146,7 +147,7 @@ class PPO:
             old_disReturn = (old_disReturn - old_disReturn.mean()) / 1e-5
         else:
             old_disReturn = (old_disReturn - old_disReturn.mean()) / \
-            (old_disReturn.std())
+                (old_disReturn.std())
 
         # old_disReturn = (old_disReturn - old_disReturn.mean()) / \
         #     (old_disReturn.std()+1e-5)
@@ -217,6 +218,7 @@ class Agent(mp.Process):
         self.env.seed(seed)
 
     def run(self):
+        print("Agent {} started, Process ID {}".format(self.name, os.getpid()))
         actions = []
         rewards = []
         states = []
@@ -258,14 +260,18 @@ class Agent(mp.Process):
 
                     self.add_experience_to_pool(stateT, actionT,
                                                 logprobT, disReturn)
-                    tmp = round(sum(ep_reward_log)/len(ep_reward_log))
-                    print("Agent {} Episode {}, Avg reward since update {}"
-                          .format(self.name, i_episodes, tmp))
-                    self.pipe.send(tmp)
-                    _ = self.pipe.recv()
-
+                    if len(ep_reward_log) != 0:
+                        msg_reward = round(
+                            sum(ep_reward_log)/len(ep_reward_log))
+                    else:
+                        msg_reward = 0
+                    self.pipe.send((self.name, i_episodes, msg_reward))
+                    msg = self.pipe.recv()
+                    if msg == "RENDER":
+                        self.render = True
                     timestep = 0
                     ep_reward_log = []
+                    reward_log = 0
 
                     actions = []
                     rewards = []
@@ -335,9 +341,9 @@ def main():
 
     ######################################
     # Training Environment configuration
-    # env_name = "LunarLander-v2"
-    env_name = "CartPole-v0"
-    num_agents = 1
+    env_name = "LunarLander-v2"
+    # env_name = "CartPole-v0"
+    num_agents = 4
     max_timestep = 300        # per episode the agent is allowed to take
     update_timestep = 2000    # total number of steps to take before update
     max_episode = 5000
@@ -345,18 +351,23 @@ def main():
     render = False
 
     # gets the parameter about the environment
-    tmp_env = gym.make(env_name)
-    state_dim = tmp_env.observation_space.shape[0]
-    action_dim = tmp_env.action_space.n
-    del tmp_env
+    sample_env = gym.make(env_name)
+    state_dim = sample_env.observation_space.shape[0]
+    action_dim = 4
+    action_dim = sample_env.action_space.n
+    print("State dim {} Action dim {}".format(state_dim, action_dim))
+    del sample_env
 
     # PPO & Network Parameters
-    n_latent_var = 64
+    n_latent_var = 420
     lr = 0.002
     betas = (0.9, 0.999)
     gamma = 0.99
     K_epochs = 4
     eps_clip = 0.2
+
+    # logging settings
+    log_interval = 5
     ######################################
 
     ppo = PPO(state_dim, action_dim, n_latent_var,
@@ -378,35 +389,47 @@ def main():
 
     for agent in agents:
         agent.start()
-        print("Agent {} started".format(agent.name))
 
     # starting training loop
     update_iteration = 0
     while True:
 
-        agent_rewards = []
+        agent_info = []
         pipe_to_remove = []
         for pipe in pipes:
-            agent_reward = pipe.recv()
-            if agent_reward == "END":
+            info = pipe.recv()
+            if info == "END":
                 pipe_to_remove.append(pipe)
             else:
-                agent_rewards.append(agent_reward)
+                agent_info.append(info)
         pipes = [x for x in pipes if x not in pipe_to_remove]
 
         # this checks if all agents have finished
         if len(pipes) == 0:
             break
         else:
-            msg = update_iteration
             ppo.update(memory)
             update_iteration += 1
 
-        if update_iteration % 20 == 0:
-            print("Main: Update Iteration: {}, Reward: {}\n"
-                  .format(update_iteration,
-                          int(sum(agent_rewards)/len(agent_rewards))))
+        if update_iteration % log_interval == 0:
+            agents_avg_reward = 0
+            for info in agent_info:
+                print("Agent {} Episode {}, Avg Reward/Episode {}"
+                      .format(info[0], info[1], info[2]))
+                agents_avg_reward += info[2]
 
+                writer.add_scalar(
+                    'Agent {} Reward/Episode'.format(info[0]), info[2], update_iteration)
+            print("Main: Update Iteration: {}, Avg Reward Amongst Agents: {}\n"
+                  .format(update_iteration,
+                          round(agents_avg_reward/len(agent_info), 2)))
+            writer.add_scalar(
+                'Reward/Episode', round(agents_avg_reward/len(agent_info), 2), update_iteration)
+
+        if update_iteration == 50:
+            msg = "RENDER"
+        else:
+            msg = update_iteration
         for pipe in pipes:
             pipe.send(msg)
 
