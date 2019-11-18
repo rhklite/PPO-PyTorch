@@ -1,14 +1,24 @@
 # TODO: test if code is faster with CPU or GPU
 # TODO: see how to use FP16 instead of FP32
 # TODO: remove unnecessary .to(device) to save memory
+
+
 # FIXME: rewrite multiprocessing step to stop memory leak
 # MAJOR CHANGE 1: removed parallel processing, only 1 agent, directly used func: env_step(). no improvement
-# Major change 2: noticed difference in the ratio calculated in the first update cycle against the baseline code (resolved)
+
+
+# FIXME: not learning (resolved)
+# MAJOR CHANGE 2: noticed difference in the ratio calculated in the first update cycle against the baseline code (resolved)
 #   fix attempt 1: pass in PPO object to act instead of load ppo state dict, didn't work
 #   fix: noticed the appended logprob has 1 offset. moved append after act, before env.step(action) in the env_step function
 #   big performance boost from that... wtf
-# FIXME: figure out why the training saturates...
-# 
+
+# MAJOR CHANGE 3: changed the episodic way to the same as the baseline code
+# FIXME (resolved): figure out why the training saturates... bug with logging
+#       observation 1: the reward would reach a high result right off the bat, then saturate depending on the time step per training iteration. this probably mean there some clipping happening with the training steps that I'm doing. The training steps i'm doing is different than the base code
+#   observation 2: might be something in the update. It's not updateing after the first update. the steps almost happens too perfectly.
+#   observation 3 : its NOT because i did not have max_steps to end the episode... but max_steps is probably useful for some environments that does not have a limit to steps, i.e lunar landar
+
 import os
 import gym
 import time
@@ -23,7 +33,7 @@ from torch.utils.tensorboard import SummaryWriter
 device = "cpu"
 
 # uncomment this and add .to(device) after agent_policy
-#  if sending agent_policy to GPU, it actually made it slower...
+# if sending agent_policy to GPU, it actually made it slower...
 
 # mp.set_start_method('spawn', True)
 writer = SummaryWriter()
@@ -344,12 +354,10 @@ class ParallelAgents:
                 episode_reward = 0
 
             if render:
-                time.sleep(0.001)
                 agent.env.render()
             # if agent.render:
             #     agent.env.render()
 
-        epoch_reward.append(episode_reward)
         # convert the experience collected into memory
         stateTensor, actionTensor, logprobTensor, disReturnTensor = \
             self.experience_to_tensor(
@@ -358,6 +366,7 @@ class ParallelAgents:
         self.add_experience_to_pool(
             stateTensor, actionTensor, logprobTensor, disReturnTensor)
 
+        # TODO: in lundar lander, some episodes never ended. this might've been due to the lundar lander environment does not have a step limit, need to add the max step limit in
         if len(epoch_reward) > 0:
             epoch_reward = float(sum(epoch_reward))/float(len(epoch_reward))
         else:
@@ -417,9 +426,9 @@ def main():
     env_name = "CartPole-v0"
     num_agent = 1
     render = False
-    timestep = 2000
+    timestep = 2000           # number of timesteps until update
     seed = None
-    training_iter = 2000      # total number of training episodes
+    training_iter = 300      # total number of training episodes
 
     # gets the parameter about the environment
     tmp_env = gym.make(env_name)
@@ -469,11 +478,11 @@ def main():
         # update the policy with the memories collected from the agents
         ppo.update(memory)
 
-        if i % 20 == 0:
+        if i % 1 == 0:
 
             train_end = time.perf_counter()
             print("Training {} done, {:.2f} sec elapsed, reward {}".
-                  format(i, train_end-train_start, epoch_reward))
+                  format(i, train_end-train_start, int(epoch_reward)))
             train_start = time.perf_counter()
         # torch.save(ppo.policy.state_dict(),
         #            './parallel_results/Step{}_R{:1f}_{}.pth'
@@ -485,8 +494,8 @@ def main():
     print("Training Completed, {:.2f} sec elapsed".format(end-start))
 
     torch.save(ppo.policy.state_dict(),
-                './parallel_results/Step{}_R{:1f}_{}.pth'
-                .format(i, epoch_reward, env_name))
+               './parallel_results/Step{}_R{:1f}_{}.pth'
+               .format(i, epoch_reward, env_name))
 
 
 if __name__ == "__main__":

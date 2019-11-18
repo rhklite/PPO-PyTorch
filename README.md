@@ -1,5 +1,5 @@
-# PPO-PyTorch
-Minimal PyTorch implementation of Proximal Policy Optimization with clipped objective for OpenAI gym environments.
+# Parallel PPO-PyTorch
+A parallel version of Proximal Policy Optimization with clipped objective. Built from [PPO-PyTorch github](https://github.com/nikhilbarhate99/PPO-PyTorch)
 
 ## Usage
 
@@ -13,7 +13,7 @@ Minimal PyTorch implementation of Proximal Policy Optimization with clipped obje
 Trained and tested on:
 ```
 Python 3.6
-PyTorch 1.0
+PyTorch 1.3
 NumPy 1.15.3
 gym 0.10.8
 Pillow 5.3.0
@@ -21,12 +21,12 @@ Pillow 5.3.0
 
 ## Results
 
-PPO Discrete LunarLander-v2 (1200 episodes)           |  PPO Continuous BipedalWalker-v2 (4000 episodes)
+<!-- PPO Discrete LunarLander-v2 (1200 episodes)           |  PPO Continuous BipedalWalker-v2 (4000 episodes)
 :-------------------------:|:-------------------------:
 ![](https://github.com/nikhilbarhate99/PPO-PyTorch/blob/master/gif/PPO_LunarLander-v2.gif) |  ![](https://github.com/nikhilbarhate99/PPO-PyTorch/blob/master/gif/PPO_BipedalWalker-v2.gif)
-
+ -->
 
 ## References
 
 - PPO [paper](https://arxiv.org/abs/1707.06347)
-- [OpenAI Spinning up](https://spinningup.openai.com/en/latest/)
+- [PPO-PyTorch github](https://github.com/nikhilbarhate99/PPO-PyTorch)

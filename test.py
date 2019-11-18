@@ -5,11 +5,12 @@ import torch
 
 def test():
     ############## Hyperparameters ##############
-    env_name = "LunarLander-v2"
+    # env_name = "LunarLander-v2"
+    env_name = "CartPole-v0"
     # creating environment
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
-    action_dim = 4
+    action_dim = 2
     render = False
     max_timesteps = 500
     n_latent_var = 64           # number of variables in hidden layer
@@ -20,13 +21,14 @@ def test():
     eps_clip = 0.2              # clip parameter for PPO
     #############################################
 
-    n_episodes = 5
+    n_episodes = 10
     max_timesteps = 300
     render = True
     save_gif = False
 
-    filename = "Step140_R-11_LunarLander-v2.pth"
-    directory = "./parallel_results/"
+    # filename = "parallel_v3_PPO_CartPole-v0.pth"
+    filename = "Rewrite_PPO_CartPole-v0.pth"
+    directory = "./"
     
     memory = Memory()
     ppo = PPO(state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip)

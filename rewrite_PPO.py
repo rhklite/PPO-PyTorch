@@ -252,10 +252,10 @@ def main():
     state_dim = env.observation_space.shape[0]
     action_dim = 2
     render = False
-    solved_reward = 200         # stop training if avg_reward > solved_reward
-    log_interval = 20           # print avg reward in the interval
-    max_episodes = 50000        # max training episodes
-    max_timesteps = 300         # max timesteps in one episode
+    solved_reward = 230         # stop training if avg_reward > solved_reward
+    log_interval = 100           # print avg reward in the interval
+    max_episodes = 2000        # max training episodes
+    max_timesteps = 2000         # max timesteps in one episode
     n_latent_var = 64           # number of variables in hidden layer
     update_timestep = 2000      # update policy every n timesteps
     lr = 0.002
@@ -280,6 +280,7 @@ def main():
     running_reward = 0
     avg_length = 0
     timestep = 0
+    update_count = 0
 
     # training loop
     # max episodes is more of a stoping condition
@@ -289,6 +290,11 @@ def main():
             timestep += 1
 
             # Running policy_old:
+            # although this is called policy_old, its actually the new policy?
+            # because the new policy is loaded into the old policy in every update
+
+            # print("true 1? {}".format(ppo.policy.parameters()
+            #                           == ppo.policy_old.parameters()))
             action = ppo.policy_old.act(state, memory)
             state, reward, done, _ = env.step(action)
 
@@ -298,6 +304,7 @@ def main():
 
             # update if its time
             if timestep % update_timestep == 0:
+                update_count += 1
                 ppo.update(memory)
                 memory.clear_memory()
                 timestep = 0
@@ -306,14 +313,18 @@ def main():
             if render:
                 env.render()
             if done:
+                # print("environment is done {}".format(done))
                 break
+
+        if not done:
+            print("episode {} ended with max step reached".format(i_episode))
 
         avg_length += t
 
         if running_reward > (log_interval*solved_reward):
             print("########## Solved! ##########")
             torch.save(ppo.policy.state_dict(),
-                       './PPO_{}.pth'.format(env_name))
+                       './Rewrite_PPO_{}.pth'.format(env_name))
             break
 
         # logging
@@ -321,8 +332,8 @@ def main():
             avg_length = int(avg_length/log_interval)
             running_reward = int((running_reward/log_interval))
 
-            print('Episode {} \t avg length: {} \t reward: {}'.format(
-                i_episode, avg_length, running_reward))
+            print('Episode {} \t Updates: {} \t reward: {}'.format(
+                i_episode, update_count, running_reward))
             running_reward = 0
             avg_length = 0
 
@@ -350,6 +361,9 @@ def main():
         #                       current_reward, i_episode)
         #     running_reward = []
         #     avg_length = 0
+
+    torch.save(ppo.policy.state_dict(),
+               './Rewrite_PPO_{}.pth'.format(env_name))
 
 
 if __name__ == '__main__':

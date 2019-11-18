@@ -167,16 +167,16 @@ class PPO:
 
 def main():
     # Hyperparameters
-    env_name = "LunarLander-v2"
+    env_name = "CartPole-v0"
     # creating environment
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
-    action_dim = 4
+    action_dim = 2
     render = False
     solved_reward = 230         # stop training if avg_reward > solved_reward
-    log_interval = 20           # print avg reward in the interval
-    max_episodes = 50000        # max training episodes
-    max_timesteps = 2000         # max timesteps in one episode
+    log_interval = 100           # print avg reward in the interval
+    max_episodes = 1000        # max training episodes
+    max_timesteps = 300         # max timesteps in one episode
     n_latent_var = 64           # number of variables in hidden layer
     update_timestep = 2000      # update policy every n timesteps
     lr = 0.002
@@ -243,7 +243,9 @@ def main():
                 i_episode, avg_length, running_reward))
             running_reward = 0
             avg_length = 0
-
+            
+    torch.save(ppo.policy.state_dict(),
+               './Rewrite_PPO_{}.pth'.format(env_name))
 
 if __name__ == '__main__':
     main()

@@ -3,3 +3,5 @@ runs/
 *.pyc
 __pycache__
 archive/
+*.pth
+.ipynb_checkpoints
