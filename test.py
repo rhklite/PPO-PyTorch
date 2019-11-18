@@ -27,7 +27,7 @@ def test():
     save_gif = False
 
     # filename = "parallel_v3_PPO_CartPole-v0.pth"
-    filename = "Rewrite_PPO_CartPole-v0.pth"
+    filename = "parallel_v3_PPO_CartPole-v0.pth"
     directory = "./"
     
     memory = Memory()

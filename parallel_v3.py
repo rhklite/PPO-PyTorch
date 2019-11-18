@@ -1,7 +1,4 @@
 # TODO: test if code is faster with CPU or GPU
-# TODO: see how to use FP16 instead of FP32
-# TODO: remove unnecessary .to(device) to save memory
-# FIXME: rewrite multiprocessing step to stop memory leak
 import gym
 import time
 import torch
@@ -10,10 +7,8 @@ import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-import print_util
-
-# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-device = "cpu"
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device = "cpu"
 
 # uncomment this and add .to(device) after agent_policy
 #  if sending agent_policy to GPU, it actually made it slower...
@@ -147,9 +142,14 @@ class PPO:
         old_logprobs = memory.logprobs.detach()
         old_disReturn = memory.disReturn.detach()
 
-        # TODO: check if this is the right place to normalize reward
-        old_disReturn = (old_disReturn - old_disReturn.mean()) / \
-            (old_disReturn.std()+1e-5)
+        if old_disReturn.std() == 0:
+            old_disReturn = (old_disReturn - old_disReturn.mean()) / 1e-5
+        else:
+            old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+            (old_disReturn.std())
+
+        # old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+        #     (old_disReturn.std()+1e-5)
 
         for _ in range(self.K_epochs):
             # Evaluating old actions and values:
@@ -258,7 +258,7 @@ class Agent(mp.Process):
 
                     self.add_experience_to_pool(stateT, actionT,
                                                 logprobT, disReturn)
-                    tmp = int(sum(ep_reward_log)/len(ep_reward_log))
+                    tmp = round(sum(ep_reward_log)/len(ep_reward_log))
                     print("Agent {} Episode {}, Avg reward since update {}"
                           .format(self.name, i_episodes, tmp))
                     self.pipe.send(tmp)
@@ -340,7 +340,7 @@ def main():
     num_agents = 1
     max_timestep = 300        # per episode the agent is allowed to take
     update_timestep = 2000    # total number of steps to take before update
-    max_episode = 50000
+    max_episode = 5000
     seed = None               # seeding the environment
     render = False
 
