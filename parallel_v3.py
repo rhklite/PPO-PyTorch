@@ -10,10 +10,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 device = "cpu"
-
-# uncomment this and add .to(device) after agent_policy
-#  if sending agent_policy to GPU, it actually made it slower...
-
 mp.set_start_method('spawn', True)
 writer = SummaryWriter()
 
@@ -227,8 +223,9 @@ class Agent(mp.Process):
         timestep = 0
         # lists to collect agent experience
         # variables for logging
-        reward_log = 0
-        ep_reward_log = []
+        reward_msg = 0
+        episodes_lapsed = 0
+        # ep_reward_log = []
 
         for i_episodes in range(1, self.max_episode+2):
             state = self.env.reset()
@@ -251,7 +248,7 @@ class Agent(mp.Process):
                 rewards.append(reward)
                 is_terminal.append(done)
 
-                reward_log += reward
+                reward_msg += reward
 
                 if timestep % self.update_timestep == 0:
                     stateT, actionT, logprobT, disReturn = \
@@ -260,19 +257,17 @@ class Agent(mp.Process):
 
                     self.add_experience_to_pool(stateT, actionT,
                                                 logprobT, disReturn)
-                    if len(ep_reward_log) != 0:
-                        msg_reward = round(
-                            sum(ep_reward_log)/len(ep_reward_log))
-                    else:
-                        msg_reward = 0
-                    self.pipe.send((self.name, i_episodes, msg_reward))
+
+                    episodes_lapsed = i_episodes - episodes_lapsed
+                    avg_reward = reward_msg/episodes_lapsed
+                    episodes_lapsed = i_episodes
+
+                    self.pipe.send((self.name, i_episodes, avg_reward))
                     msg = self.pipe.recv()
                     if msg == "RENDER":
                         self.render = True
                     timestep = 0
-                    ep_reward_log = []
-                    reward_log = 0
-
+                    reward_msg = 0
                     actions = []
                     rewards = []
                     states = []
@@ -280,8 +275,7 @@ class Agent(mp.Process):
                     is_terminal = []
 
                 if done:
-                    ep_reward_log.append(reward_log)
-                    reward_log = 0
+
                     break
 
                 if self.render:
