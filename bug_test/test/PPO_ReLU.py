@@ -30,9 +30,9 @@ class ActorCritic(nn.Module):
         # actor
         self.action_layer = nn.Sequential(
             nn.Linear(state_dim, n_latent_var),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(n_latent_var, n_latent_var),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(n_latent_var, action_dim),
             nn.Softmax(dim=-1)
         )
@@ -40,9 +40,9 @@ class ActorCritic(nn.Module):
         # critic
         self.value_layer = nn.Sequential(
             nn.Linear(state_dim, n_latent_var),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(n_latent_var, n_latent_var),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(n_latent_var, 1)
         )
 
@@ -175,7 +175,7 @@ def main():
     render = False
     solved_reward = 230         # stop training if avg_reward > solved_reward
     log_interval = 100           # print avg reward in the interval
-    max_episodes = 1000        # max training episodes
+    max_episodes = 50000        # max training episodes
     max_timesteps = 300         # max timesteps in one episode
     n_latent_var = 64           # number of variables in hidden layer
     update_timestep = 2000      # update policy every n timesteps

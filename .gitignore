@@ -5,3 +5,4 @@ __pycache__
 archive/
 *.pth
 .ipynb_checkpoints
+original/

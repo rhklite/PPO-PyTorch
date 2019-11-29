@@ -2,6 +2,8 @@
 import os
 import gym
 import time
+from datetime import date
+import collection
 import torch
 import torch.nn as nn
 import torch.multiprocessing as mp
@@ -48,18 +50,18 @@ class ActorCritic(nn.Module):
 
         self.action_layer = nn.Sequential(
             nn.Linear(state_dim, n_latent_var),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(n_latent_var, n_latent_var),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(n_latent_var, action_dim),
             nn.Softmax(dim=-1)
         )
 
         self.value_layer = nn.Sequential(
             nn.Linear(state_dim, n_latent_var),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(n_latent_var, n_latent_var),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(n_latent_var, 1)
         )
 
@@ -117,6 +119,12 @@ class PPO:
             n_latent_var
         ).to(device)
 
+        self.optimizer = torch.optim.Adam(
+            self.policy.parameters(),
+            lr=lr,
+            betas=betas
+        )
+
         self.policy_old = ActorCritic(
             state_dim,
             action_dim,
@@ -124,12 +132,6 @@ class PPO:
         ).to(device).share_memory()
 
         self.policy_old.load_state_dict(self.policy.state_dict())
-
-        self.optimizer = torch.optim.Adam(
-            self.policy.parameters(),
-            lr=lr,
-            betas=betas
-        )
 
         self.MseLoss = nn.MSELoss()
 
@@ -139,14 +141,14 @@ class PPO:
         old_logprobs = memory.logprobs.detach()
         old_disReturn = memory.disReturn.detach()
 
-        if old_disReturn.std() == 0:
-            old_disReturn = (old_disReturn - old_disReturn.mean()) / 1e-5
-        else:
-            old_disReturn = (old_disReturn - old_disReturn.mean()) / \
-                (old_disReturn.std())
+        # if old_disReturn.std() == 0:
+        #     old_disReturn = (old_disReturn - old_disReturn.mean()) / 1e-5
+        # else:
+        #     old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+        #         (old_disReturn.std())
 
-        # old_disReturn = (old_disReturn - old_disReturn.mean()) / \
-        #     (old_disReturn.std()+1e-5)
+        old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+            (old_disReturn.std()+1e-5)
 
         for _ in range(self.K_epochs):
             # Evaluating old actions and values:
@@ -337,12 +339,13 @@ def main():
     # Training Environment configuration
     env_name = "LunarLander-v2"
     # env_name = "CartPole-v0"
-    num_agents = 4
+    num_agents = 1
     max_timestep = 300        # per episode the agent is allowed to take
     update_timestep = 2000    # total number of steps to take before update
-    max_episode = 5000
+    max_episode = 50000
     seed = None               # seeding the environment
     render = False
+    solved_reward = 230
 
     # gets the parameter about the environment
     sample_env = gym.make(env_name)
@@ -353,7 +356,7 @@ def main():
     del sample_env
 
     # PPO & Network Parameters
-    n_latent_var = 420
+    n_latent_var = 64
     lr = 0.002
     betas = (0.9, 0.999)
     gamma = 0.99
@@ -386,6 +389,7 @@ def main():
 
     # starting training loop
     update_iteration = 0
+    current_reward = 0
     while True:
 
         agent_info = []
@@ -408,27 +412,33 @@ def main():
         if update_iteration % log_interval == 0:
             agents_avg_reward = 0
             for info in agent_info:
-                print("Agent {} Episode {}, Avg Reward/Episode {}"
+                print("Agent {} Episode {}, Avg Reward/Episode {:.2f}"
                       .format(info[0], info[1], info[2]))
                 agents_avg_reward += info[2]
 
-                writer.add_scalar(
-                    'Agent {} Reward/Episode'.format(info[0]), info[2], update_iteration)
+                writer.add_scalar('Agent {} Reward/Episode'
+                                  .format(info[0]), info[2], update_iteration)
+            current_reward = round(agents_avg_reward/len(agent_info), 2)
             print("Main: Update Iteration: {}, Avg Reward Amongst Agents: {}\n"
-                  .format(update_iteration,
-                          round(agents_avg_reward/len(agent_info), 2)))
+                  .format(update_iteration, current_reward))
             writer.add_scalar(
-                'Reward/Episode', round(agents_avg_reward/len(agent_info), 2), update_iteration)
+                'Reward/Episode', current_reward, update_iteration)
 
-        if update_iteration == 50:
-            msg = "RENDER"
-        else:
-            msg = update_iteration
+        if solved_reward <= current_reward:
+            print("==============TanH SOLVED==============")
+            break
+
+        # if update_iteration % 50 == 0:
+        #     msg = "RENDER"
+        # else:
+        #     msg = update_iteration
+        msg = update_iteration
         for pipe in pipes:
             pipe.send(msg)
 
+    today = date.today()
     torch.save(ppo.policy.state_dict(),
-               './parallel_v3_PPO_{}.pth'.format(env_name))
+               './v3_tanh_PPO_{}_{}_{}_{}.pth'.format(env_name, num_agents, current_reward, today))
 
     for agent in agents:
         agent.terminate()
