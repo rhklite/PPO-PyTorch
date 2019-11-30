@@ -4,8 +4,8 @@ A parallel version of Proximal Policy Optimization with clipped objective. Built
 
 ## Usage
 
-- To test a preTrained network : run `test.py`
-- To train a new network : run `parallel_v4.py`
+- To test a pre-trained network : run `test.py`
+- To train a new network : run `parallel_PPO.py`
 - All the hyperparameters are in the file, main function
 
 

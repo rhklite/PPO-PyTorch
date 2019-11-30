@@ -6,3 +6,6 @@ archive/
 *.pth
 .ipynb_checkpoints
 original/
+bug_test/
+./*.pth
+./*.csv

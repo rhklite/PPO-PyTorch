@@ -1,9 +1,15 @@
-# TODO: test if code is faster with CPU or GPU
+# TODO: implement batching
+# TODO: implement GAE
+# TODO: implement value clipping (check openAI baseline)
+# TODO: see if i need to do value averaging
+
 import os
 import gym
 import time
+from print_util import printInfo
 from datetime import date
-import collection
+from collections import namedtuple
+import csv
 import torch
 import torch.nn as nn
 import torch.multiprocessing as mp
@@ -14,6 +20,14 @@ from torch.utils.tensorboard import SummaryWriter
 device = "cpu"
 mp.set_start_method('spawn', True)
 writer = SummaryWriter()
+
+# creating msgs for communication between subprocess and main process.
+# for when agent reached logging episode
+MsgRewardInfo = namedtuple('MsgRewardInfo', ['agent', 'episode', 'reward'])
+# for when agent reached update timestep
+MsgUpdateRequest = namedtuple('MsgUpdateRequest', ['agent', 'update'])
+# for when agent reached max episodes
+MsgMaxReached = namedtuple('MsgMaxReached', ['agent', 'reached'])
 
 
 class Memory:
@@ -40,7 +54,6 @@ class Memory:
         self.disReturn = torch.zeros(
             update_timestep*num_agents).to(device).share_memory_()
 
-        # TODO: find a way to share this, try .share_memory_() to policy_old
         self.agent_policy = agent_policy
 
 
@@ -68,7 +81,6 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
 
-    # def act(self, state, memory):
     def act(self, state):
         """pass the state observed into action_layer network to determine the action
         that the agent should take.
@@ -93,12 +105,8 @@ class ActorCritic(nn.Module):
         action_probs = self.action_layer(state)
         dist = Categorical(action_probs)
 
-        dist_entropy = dist.entropy()
-
-        # why are we getting the log prob here?
-        # the loss function used by PPO doesn't include a log term
         action_logprobs = dist.log_prob(action)
-
+        dist_entropy = dist.entropy()
         state_value = self.value_layer(state)
 
         return action_logprobs, torch.squeeze(state_value), dist_entropy
@@ -141,14 +149,14 @@ class PPO:
         old_logprobs = memory.logprobs.detach()
         old_disReturn = memory.disReturn.detach()
 
-        # if old_disReturn.std() == 0:
-        #     old_disReturn = (old_disReturn - old_disReturn.mean()) / 1e-5
-        # else:
-        #     old_disReturn = (old_disReturn - old_disReturn.mean()) / \
-        #         (old_disReturn.std())
+        if old_disReturn.std() == 0:
+            old_disReturn = (old_disReturn - old_disReturn.mean()) / 1e-5
+        else:
+            old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+                (old_disReturn.std())
 
-        old_disReturn = (old_disReturn - old_disReturn.mean()) / \
-            (old_disReturn.std()+1e-5)
+        # old_disReturn = (old_disReturn - old_disReturn.mean()) / \
+        #     (old_disReturn.std()+1e-5)
 
         for _ in range(self.K_epochs):
             # Evaluating old actions and values:
@@ -170,7 +178,7 @@ class PPO:
             # parameters, however, i think the author of this code just used
             # this, even though the two network are not sharing parameters
             loss = -torch.min(surr1, surr2) + 0.5 * \
-                self.MseLoss(state_values, old_disReturn) - 0.01*dist_entropy
+                self.MseLoss(state_values, old_disReturn) - 0.005*dist_entropy
 
             # take gradient step
             self.optimizer.zero_grad()
@@ -187,7 +195,7 @@ class Agent(mp.Process):
     """
 
     def __init__(self, name, memory, pipe, env_name, max_episode, max_timestep,
-                 update_timestep, gamma, seed=None, render=False):
+                 update_timestep, log_interval, gamma, seed=None, render=False):
         """initialization
 
         Args:
@@ -202,6 +210,7 @@ class Agent(mp.Process):
         mp.Process.__init__(self, name=name)
 
         # variables usef for multiprocessing
+        self.proc_id = name
         self.memory = memory
         self.pipe = pipe
 
@@ -209,6 +218,8 @@ class Agent(mp.Process):
         self.max_episode = max_episode
         self.max_timestep = max_timestep
         self.update_timestep = update_timestep
+        self.log_interval = log_interval
+
         self.gamma = gamma
         self.render = render
         self.env = gym.make(env_name)
@@ -225,15 +236,15 @@ class Agent(mp.Process):
         timestep = 0
         # lists to collect agent experience
         # variables for logging
-        reward_msg = 0
-        episodes_lapsed = 0
-        # ep_reward_log = []
+        running_reward = 0
 
         for i_episodes in range(1, self.max_episode+2):
             state = self.env.reset()
 
             if i_episodes == self.max_episode+1:
-                self.pipe.send("END")
+                printInfo("Max episodes reached")
+                msg = MsgMaxReached(self.proc_id, True)
+                self.pipe.send(msg)
                 break
 
             for i in range(self.max_timestep):
@@ -250,7 +261,7 @@ class Agent(mp.Process):
                 rewards.append(reward)
                 is_terminal.append(done)
 
-                reward_msg += reward
+                running_reward += reward
 
                 if timestep % self.update_timestep == 0:
                     stateT, actionT, logprobT, disReturn = \
@@ -260,16 +271,12 @@ class Agent(mp.Process):
                     self.add_experience_to_pool(stateT, actionT,
                                                 logprobT, disReturn)
 
-                    episodes_lapsed = i_episodes - episodes_lapsed
-                    avg_reward = reward_msg/episodes_lapsed
-                    episodes_lapsed = i_episodes
-
-                    self.pipe.send((self.name, i_episodes, avg_reward))
+                    msg = MsgUpdateRequest(int(self.proc_id), True)
+                    self.pipe.send(msg)
                     msg = self.pipe.recv()
                     if msg == "RENDER":
                         self.render = True
                     timestep = 0
-                    reward_msg = 0
                     actions = []
                     rewards = []
                     states = []
@@ -277,12 +284,18 @@ class Agent(mp.Process):
                     is_terminal = []
 
                 if done:
-
                     break
 
                 if self.render:
                     time.sleep(0.005)
                     self.env.render()
+
+            if i_episodes % self.log_interval == 0:
+                running_reward = running_reward/self.log_interval
+                # printInfo("sending reward msg")
+                msg = MsgRewardInfo(self.proc_id, i_episodes, running_reward)
+                self.pipe.send(msg)
+                running_reward = 0
 
     def experience_to_tensor(self, states, actions, rewards,
                              logprobs, is_terminal):
@@ -337,21 +350,24 @@ def main():
 
     ######################################
     # Training Environment configuration
+    # env_name = "Reacher-v2"
     env_name = "LunarLander-v2"
     # env_name = "CartPole-v0"
-    num_agents = 1
+    num_agents = 4
     max_timestep = 300        # per episode the agent is allowed to take
     update_timestep = 2000    # total number of steps to take before update
     max_episode = 50000
     seed = None               # seeding the environment
     render = False
     solved_reward = 230
+    log_interval = 100
 
     # gets the parameter about the environment
     sample_env = gym.make(env_name)
     state_dim = sample_env.observation_space.shape[0]
     action_dim = 4
-    action_dim = sample_env.action_space.n
+    # action_dim = sample_env.action_space.n
+
     print("State dim {} Action dim {}".format(state_dim, action_dim))
     del sample_env
 
@@ -362,9 +378,6 @@ def main():
     gamma = 0.99
     K_epochs = 4
     eps_clip = 0.2
-
-    # logging settings
-    log_interval = 5
     ######################################
 
     ppo = PPO(state_dim, action_dim, n_latent_var,
@@ -377,71 +390,97 @@ def main():
     agents = []
     pipes = []
 
+    # tracking subprocess request status
+    update_request = [False]*num_agents
+    agent_completed = [False]*num_agents
+
+    # tracking training status
+    update_iteration = 0
+    log_iteration = 0
+    average_eps_reward = 0
+    reward_record = [[None]*num_agents]
+
+    # initialize subproceses experience
     for agent_id in range(num_agents):
         p_start, p_end = mp.Pipe()
         agent = Agent(str(agent_id), memory, p_end, env_name, max_episode,
-                      max_timestep, update_timestep, gamma, seed, render)
+                      max_timestep, update_timestep, log_interval, gamma)
+        agent.start()
         agents.append(agent)
         pipes.append(p_start)
 
-    for agent in agents:
-        agent.start()
-
     # starting training loop
-    update_iteration = 0
-    current_reward = 0
     while True:
+        for i, conn in enumerate(pipes):
+            if conn.poll():
+                msg = conn.recv()
 
-        agent_info = []
-        pipe_to_remove = []
-        for pipe in pipes:
-            info = pipe.recv()
-            if info == "END":
-                pipe_to_remove.append(pipe)
-            else:
-                agent_info.append(info)
-        pipes = [x for x in pipes if x not in pipe_to_remove]
+                # parsing information recieved from subprocess
 
-        # this checks if all agents have finished
-        if len(pipes) == 0:
+                # if agent reached maximum training episode limit
+                if type(msg).__name__ == "MsgMaxReached":
+                    agent_completed[i] = True
+                # if agent is waiting for network update
+                elif type(msg).__name__ == "MsgUpdateRequest":
+                    update_request[i] = True
+                    if False not in update_request:
+                        ppo.update(memory)
+                        update_iteration += 1
+                        update_request = [False]*num_agents
+                        msg = update_iteration
+                        # send to signal subprocesses to continue
+                        for pipe in pipes:
+                            pipe.send(msg)
+                # if agent is sending over reward stats
+                elif type(msg).__name__ == "MsgRewardInfo":
+                    idx = int(msg.episode/log_interval)
+                    if len(reward_record) < idx:
+                        reward_record.append([None]*num_agents)
+                    reward_record[idx-1][i] = msg.reward
+
+                    # if all agents has sent msg for this logging iteration
+                    if (None not in reward_record[log_iteration]):
+                        eps_reward = reward_record[log_iteration]
+                        average_eps_reward = 0
+                        for i in range(len(eps_reward)):
+                            print("Agent {} Episode {}, Avg Reward/Episode {:.2f}"
+                                  .format(i, (log_iteration+1)*log_interval,
+                                          eps_reward[i]))
+                            average_eps_reward += eps_reward[i]
+                        print("Main: Update Iteration: {}, Avg Reward Amongst Agents: {:.2f}\n"
+                              .format(update_iteration,
+                                      average_eps_reward/num_agents))
+                        log_iteration += 1
+
+        if False not in agent_completed:
+            print("=Training ended with Max Episodes=")
             break
-        else:
-            ppo.update(memory)
-            update_iteration += 1
-
-        if update_iteration % log_interval == 0:
-            agents_avg_reward = 0
-            for info in agent_info:
-                print("Agent {} Episode {}, Avg Reward/Episode {:.2f}"
-                      .format(info[0], info[1], info[2]))
-                agents_avg_reward += info[2]
-
-                writer.add_scalar('Agent {} Reward/Episode'
-                                  .format(info[0]), info[2], update_iteration)
-            current_reward = round(agents_avg_reward/len(agent_info), 2)
-            print("Main: Update Iteration: {}, Avg Reward Amongst Agents: {}\n"
-                  .format(update_iteration, current_reward))
-            writer.add_scalar(
-                'Reward/Episode', current_reward, update_iteration)
-
-        if solved_reward <= current_reward:
-            print("==============TanH SOLVED==============")
+        if solved_reward <= average_eps_reward/num_agents:
+            print("==============SOLVED==============")
             break
-
-        # if update_iteration % 50 == 0:
-        #     msg = "RENDER"
-        # else:
-        #     msg = update_iteration
-        msg = update_iteration
-        for pipe in pipes:
-            pipe.send(msg)
-
-    today = date.today()
-    torch.save(ppo.policy.state_dict(),
-               './v3_tanh_PPO_{}_{}_{}_{}.pth'.format(env_name, num_agents, current_reward, today))
 
     for agent in agents:
         agent.terminate()
+
+    # saving training results
+    today = date.today()
+    file_name = './Parallel_PPO_{}_{}_{:.2f}_{}_{}' \
+        .format(env_name, num_agents, average_eps_reward/num_agents,
+                (log_iteration+1)*log_interval, today)
+
+    # # saving trained model weights
+    torch.save(ppo.policy.state_dict(), file_name+'.pth')
+
+    # # saving reward log to csv
+    heading = []
+    for i in range(num_agents):
+        heading.append("Agent {}".format(i))
+    reward_record.insert(0, heading)
+
+    with open(file_name+'.csv', 'w', newline='') as myfile:
+        wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
+        for entry in reward_record:
+            wr.writerow(entry)
 
 
 if __name__ == "__main__":

@@ -8,13 +8,13 @@ import time
 
 def test():
     ############## Hyperparameters ##############
-    env_name = "Reacher-v2"
-    # env_name = "LunarLander-v2"
+    # env_name = "Reacher-v2"
+    env_name = "LunarLander-v2"
     # env_name = "CartPole-v0"
     # creating environment
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
-    action_dim = 2
+    action_dim = 4
     render = False
     max_timesteps = 500
     n_latent_var = 64           # number of variables in hidden layer
@@ -31,8 +31,8 @@ def test():
     save_gif = False
 
     # filename = "parallel_v3_PPO_CartPole-v0.pth"
-    filename = "v4_PPO_Reacher-v2_12_-9.20_5100_2019-11-27.pth"
-    directory = "./"
+    filename = "v4_PPO_LunarLander-v2_4_214.54_1500_2019-11-23.pth"
+    directory = "./pre_trained_result/"
 
     # filename = "v3_ReLU_PPO_LunarLander-v2_1_232.93_2019-11-20.pth"
     # directory = "./bug_test/test/ReLU/"
@@ -51,7 +51,6 @@ def test():
             state, reward, done, _ = env.step(action)
             ep_reward += reward
             if render:
-                time.sleep(0.001)
                 env.render()
             if save_gif:
                 img = env.render(mode='rgb_array')
