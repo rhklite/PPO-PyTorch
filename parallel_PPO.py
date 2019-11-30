@@ -361,14 +361,17 @@ def main():
     render = False
     solved_reward = 230
     log_interval = 100
+    save_log_to_csv = True
 
     # gets the parameter about the environment
     sample_env = gym.make(env_name)
     state_dim = sample_env.observation_space.shape[0]
     action_dim = 4
     # action_dim = sample_env.action_space.n
-
-    print("State dim {} Action dim {}".format(state_dim, action_dim))
+    print("#################################")
+    print(env_name)
+    print("Number of Agents: {}".format(num_agents))
+    print("#################################\n")
     del sample_env
 
     # PPO & Network Parameters
@@ -472,15 +475,16 @@ def main():
     torch.save(ppo.policy.state_dict(), file_name+'.pth')
 
     # # saving reward log to csv
-    heading = []
-    for i in range(num_agents):
-        heading.append("Agent {}".format(i))
-    reward_record.insert(0, heading)
+    if save_log_to_csv:
+        heading = []
+        for i in range(num_agents):
+            heading.append("Agent {}".format(i))
+        reward_record.insert(0, heading)
 
-    with open(file_name+'.csv', 'w', newline='') as myfile:
-        wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
-        for entry in reward_record:
-            wr.writerow(entry)
+        with open(file_name+'.csv', 'w', newline='') as myfile:
+            wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
+            for entry in reward_record:
+                wr.writerow(entry)
 
 
 if __name__ == "__main__":
