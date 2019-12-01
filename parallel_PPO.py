@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 device = "cpu"
 mp.set_start_method('spawn', True)
-writer = SummaryWriter()
+# writer = SummaryWriter()
 
 # creating msgs for communication between subprocess and main process.
 # for when agent reached logging episode
@@ -81,7 +81,7 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
 
-    def act(self, state):
+    def act(self, state, evaluate):
         """pass the state observed into action_layer network to determine the action
         that the agent should take.
 
@@ -97,7 +97,12 @@ class ActorCritic(nn.Module):
         state = torch.from_numpy(state).float().to(device)
         action_probs = self.action_layer(state)
         dist = Categorical(action_probs)
-        action = dist.sample()
+
+        if evaluate:
+            action = dist.sample((1000,))
+            action = action.mode()[0]
+        else:
+            action = dist.sample()
 
         return action.item(), dist.log_prob(action)
 
@@ -253,7 +258,7 @@ class Agent(mp.Process):
 
                 states.append(state)
 
-                action, logprob = self.memory.agent_policy.act(state)
+                action, logprob = self.memory.agent_policy.act(state, False)
                 state, reward, done, _ = self.env.step(action)
 
                 actions.append(action)

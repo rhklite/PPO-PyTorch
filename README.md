@@ -1,6 +1,6 @@
 # Parallel PPO-PyTorch
 
-A parallel version of Proximal Policy Optimization with clipped objective. Built from [PPO-PyTorch github](https://github.com/nikhilbarhate99/PPO-PyTorch)
+A parallel agent training version of Proximal Policy Optimization with clipped objective.
 
 ## Usage
 
@@ -8,7 +8,11 @@ A parallel version of Proximal Policy Optimization with clipped objective. Built
 - To train a new network : run `parallel_PPO.py`
 - All the hyperparameters are in the file, main function
 
+## Results
 
+|              CartPole              |             LunarLander             |
+| :--------------------------------: | :---------------------------------: |
+| ![cartpole](./gif/CartPole-v0.gif) | ![lander](./gif/LunarLander-v2.gif) |
 
 ## Dependencies
 

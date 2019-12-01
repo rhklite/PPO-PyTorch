@@ -1,9 +1,10 @@
 import gym
-from PPO import PPO, Memory
+from parallel_PPO import PPO, Memory
 from PIL import Image
 import torch
 import numpy as np
 import time
+import os
 
 
 def test():
@@ -25,19 +26,18 @@ def test():
     eps_clip = 0.2              # clip parameter for PPO
     #############################################
 
-    n_episodes = 10
+    n_episodes = 1
     max_timesteps = 300
     render = True
-    save_gif = False
+    save_gif = True
 
     # filename = "parallel_v3_PPO_CartPole-v0.pth"
-    filename = "v4_PPO_LunarLander-v2_4_214.54_1500_2019-11-23.pth"
+    filename = "v4_PPO_LunarLander-v2_8_255.34_1800_2019-11-23.pth"
     directory = "./pre_trained_result/"
 
     # filename = "v3_ReLU_PPO_LunarLander-v2_1_232.93_2019-11-20.pth"
     # directory = "./bug_test/test/ReLU/"
 
-    memory = Memory()
     ppo = PPO(state_dim, action_dim, n_latent_var,
               lr, betas, gamma, K_epochs, eps_clip)
 
@@ -47,7 +47,7 @@ def test():
         ep_reward = 0
         state = env.reset()
         for t in range(max_timesteps):
-            action = ppo.policy_old.act(state, memory)
+            action, _ = ppo.policy_old.act(state, True)
             state, reward, done, _ = env.step(action)
             ep_reward += reward
             if render:
@@ -66,6 +66,11 @@ def test():
 
     print("Tested {} Episode, Average Reward {:.2f}, Std {:.2f}".format(
         n_episodes, np.average(average_reward), np.std(average_reward)))
+
+    if save_gif:
+        os.system(
+            "ffmpeg -f image2 -i ./gif/%d.jpg -r 300 ./gif/{}.gif -y".format(env_name))
+        os.system("rm ./gif/*.jpg")
 
 
 if __name__ == '__main__':
