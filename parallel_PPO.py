@@ -6,7 +6,7 @@
 import os
 import gym
 import time
-from print_util import printInfo
+from print_util import *
 from datetime import date
 from collections import namedtuple
 import csv

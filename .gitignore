@@ -4,6 +4,8 @@ runs/
 __pycache__
 archive/
 *.pth
+*.csv
+*.TXT
 .ipynb_checkpoints
 original/
 bug_test/
