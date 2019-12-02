@@ -10,6 +10,7 @@ import os
 def test():
     ############## Hyperparameters ##############
     # env_name = "Reacher-v2"
+    # env_name = "Acrobot-v1"
     env_name = "LunarLander-v2"
     # env_name = "CartPole-v0"
     # creating environment
@@ -26,14 +27,14 @@ def test():
     eps_clip = 0.2              # clip parameter for PPO
     #############################################
 
-    n_episodes = 1
-    max_timesteps = 300
+    n_episodes = 10
+    max_timesteps = 500
     render = True
-    save_gif = True
+    save_gif = False
 
     # filename = "parallel_v3_PPO_CartPole-v0.pth"
-    filename = "v4_PPO_LunarLander-v2_8_255.34_1800_2019-11-23.pth"
-    directory = "./pre_trained_result/"
+    filename = "Parallel_PPO_LunarLander-v2_4_241.92_900_2019-12-01.pth"
+    directory = "./"
 
     # filename = "v3_ReLU_PPO_LunarLander-v2_1_232.93_2019-11-20.pth"
     # directory = "./bug_test/test/ReLU/"
