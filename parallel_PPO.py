@@ -2,6 +2,7 @@
 # TODO: implement GAE
 # TODO: implement value clipping (check openAI baseline)
 # TODO: see if i need to do value averaging
+# FIXME: subprocess hangs when terminate due to max steps
 
 import os
 import gym
