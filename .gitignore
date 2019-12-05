@@ -9,3 +9,4 @@ archive/
 .ipynb_checkpoints
 original/
 bug_test/
+gif/*.jpg

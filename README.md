@@ -10,9 +10,9 @@ A parallel agent training version of Proximal Policy Optimization with clipped o
 
 ## Results
 
-|              CartPole              |             LunarLander             |
+|            CartPole-v1             |           LunarLander-v2            |
 | :--------------------------------: | :---------------------------------: |
-| ![cartpole](./gif/CartPole-v0.gif) | ![lander](./gif/LunarLander-v2.gif) |
+| ![cartpole](./gif/CartPole-v1.gif) | ![lander](./gif/LunarLander-v2.gif) |
 
 ## Dependencies
 
