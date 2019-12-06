@@ -9,6 +9,9 @@ import gc
 import re
 import torch
 import inspect
+#
+# Color terminal (https://stackoverflow.com/questions/287871/print-in-terminal-with-colors-using-python).
+
 
 class Colours:
     HEADER = '\033[95m'
@@ -32,6 +35,13 @@ def lineInfo():
     return '%s::%s:%d' % (file, info.function, info.lineno)
 #
 # Line information.
+
+
+def pathInfo():
+    callerframerecord = inspect.stack()[2]
+    frame = callerframerecord[0]
+    info = inspect.getframeinfo(frame)
+    return '%s:%s' % (info.filename, info.lineno)
 
 
 def getLineInfo(leveloffset=0):
@@ -97,6 +107,15 @@ def printWarn(*warnstr):
 # Get name of variable passed to the function
 
 
+def printLink(*linkstr):
+    msg = '%s:  ' % (pathInfo())
+    lst = ''
+    for mstr in linkstr:
+        lst += str(mstr) + ' '
+    msg = colourString(msg, Colours.OKGREEN) + lst
+    print(msg)
+
+
 def varname(p):
     level = 2 + 0
     frame = inspect.stack()[level][0]
@@ -112,7 +131,7 @@ def printTensor(tensor, usrmsg='', leveloffset=0):
     vname = varname(tensor)
     if isinstance(tensor, torch.Tensor):
         msg = colourString(colourString(getLineInfo(leveloffset), Colours.UNDERLINE), Colours.OKBLUE) + ': [' + str(vname) + '] (' + colourString(
-            str(tensor.dtype) + ' ' + str(tensor.device), Colours.WARNING) + ') -- ' + colourString('%s' % str(tensor.shape), Colours.OKGREEN) + ' ' + usrmsg
+            str(tensor.dtype) + ' ' + str(tensor.device), Colours.WARNING) + ') -- ' + colourString('%s' % str(tensor.shape), Colours.OKGREEN) + ' ' + colourString('%s' % str(tensor.grad_fn), Colours.OKGREEN)+' ' + usrmsg
     else:
         msg = colourString(colourString(getLineInfo(leveloffset), Colours.UNDERLINE), Colours.OKBLUE) + ': [' + str(vname) + '] (' + colourString(
             str(tensor.dtype) + ' ' + str(type(tensor)), Colours.WARNING) + ') -- ' + colourString('%s' % str(tensor.shape), Colours.OKGREEN) + ' ' + usrmsg
