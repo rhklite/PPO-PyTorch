@@ -30,6 +30,11 @@ Pillow 5.3.0
 
 - [ ] implement Conv net based training
 
+## Setting up Conda Environment
+
+- `conda env export | grep -v "^prefix: " > environment.yml` to export the file `environment.yml`
+- `conda create -f environment.yml` to create the conda environment used for training
+
 ## References
 
 - PPO [paper](https://arxiv.org/abs/1707.06347)
