@@ -100,8 +100,7 @@ class ActorCritic(nn.Module):
         dist = Categorical(action_probs)
 
         if evaluate:
-            action = dist.sample((1000,))
-            action = action.mode()[0]
+            _, action = action_probs.max(0)
         else:
             action = dist.sample()
 
@@ -110,7 +109,6 @@ class ActorCritic(nn.Module):
     def evaluate(self, state, action):
         action_probs = self.action_layer(state)
         dist = Categorical(action_probs)
-
         action_logprobs = dist.log_prob(action)
         dist_entropy = dist.entropy()
         state_value = self.value_layer(state)
