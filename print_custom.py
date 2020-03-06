@@ -37,13 +37,6 @@ def lineInfo():
 # Line information.
 
 
-def pathInfo():
-    callerframerecord = inspect.stack()[2]
-    frame = callerframerecord[0]
-    info = inspect.getframeinfo(frame)
-    return '%s:%s' % (info.filename, info.lineno)
-
-
 def getLineInfo(leveloffset=0):
     level = 2 + leveloffset
     callerframerecord = inspect.stack()[level]
@@ -72,6 +65,12 @@ def printInfo(*umsg):
     msg = '%s:  ' % (lineInfo())
     lst = ''
     for mstr in umsg:
+        if isinstance(mstr, torch.Tensor):
+            vname = varname(mstr, 'printInfo')
+            lst += '[' + str(vname) + ']\n'
+        elif not isinstance(mstr, str):
+            vname = varname(mstr, 'printInfo')
+            lst += '[' + str(vname) + '] '
         lst += str(mstr) + ' '
     msg = colourString(msg, Colours.OKGREEN) + lst
     print(msg)
@@ -103,38 +102,82 @@ def printWarn(*warnstr):
         lst += str(mstr) + ' '
     msg = colourString(msg, Colours.WARNING) + lst
     print(msg)
+
 #
 # Get name of variable passed to the function
 
 
-def printLink(*linkstr):
-    msg = '%s:  ' % (pathInfo())
-    lst = ''
-    for mstr in linkstr:
-        lst += str(mstr) + ' '
-    msg = colourString(msg, Colours.OKGREEN) + lst
-    print(msg)
-
-
-def varname(p):
+def varname(p, ss='printTensor'):
     level = 2 + 0
     frame = inspect.stack()[level][0]
     for line in inspect.getframeinfo(frame).code_context:
-        m = re.search(r'\bprintTensor\s*\(\s*(.*)\s*\)', line)
+        m = re.search(r'\b%s\s*\(\s*(.*)\s*\)' % ss, line)
         if m:
             return m.group(1)
+#
+#
+
+
+def printList(is_different, dlist):
+    ret = ''
+    if is_different:
+        ret = dlist
+    else:
+        ret = [str(dlist[0])]
+    return ret
+#
+#
+
+
+def getDevice(t):
+    ret = None
+    if isinstance(t, torch.Tensor):
+        ret = t.device
+    else:
+        ret = type(t)
+    return ret
+#
+# Get the s
+
+
+def tensorListInfo(tensor_list, vname, usrmsg, leveloffset):
+    assert isinstance(tensor_list, list) or isinstance(tensor_list, tuple)
+    str_ret = ''
+    dtypes = [tensor_list[0].dtype]
+    devices = [tensor_list[0].device]
+    shapes = [tensor_list[0].shape]
+    dtype_different = False
+    devices_different = False
+    shapes_different = False
+    for t_idx in range(1, len(tensor_list)):
+        t = tensor_list[t_idx]
+        dtypes.append(t.dtype)
+        devices.append(getDevice(t))
+        shapes.append(t.shape)
+        dtype_different |= (t.dtype != dtypes[0])
+        devices_different |= (t.device != devices[0])
+        shapes_different |= (t.shape != shapes[0])
+    dtypes = printList(dtype_different or devices_different, dtypes)
+    devices = printList(dtype_different or devices_different, devices)
+    shapes = str(printList(shapes_different, shapes))
+    devices_dtypes = ' '.join(map(str, *zip(dtypes, devices)))
+    msg = colourString(colourString(getLineInfo(leveloffset + 1), Colours.UNDERLINE), Colours.OKBLUE) + ': [' + str(vname) + '] ' + ('<list>' if isinstance(tensor_list, list) else '<tuple>')+' len: %d' % len(
+        tensor_list) + ' (' + colourString(devices_dtypes, Colours.WARNING) + ') -- ' + colourString('%s' % shapes, Colours.OKGREEN) + (' </list>' if isinstance(tensor_list, list) else ' </tuple>') + usrmsg
+    return msg
 #
 # Print information about a tensor.
 
 
 def printTensor(tensor, usrmsg='', leveloffset=0):
     vname = varname(tensor)
-    if isinstance(tensor, torch.Tensor):
+    if isinstance(tensor, list) or isinstance(tensor, tuple):
+        msg = tensorListInfo(tensor, vname, usrmsg, leveloffset)
+    elif isinstance(tensor, torch.Tensor):
         msg = colourString(colourString(getLineInfo(leveloffset), Colours.UNDERLINE), Colours.OKBLUE) + ': [' + str(vname) + '] (' + colourString(
             str(tensor.dtype) + ' ' + str(tensor.device), Colours.WARNING) + ') -- ' + colourString('%s' % str(tensor.shape), Colours.OKGREEN) + ' ' + colourString('%s' % str(tensor.grad_fn), Colours.OKGREEN)+' ' + usrmsg
     else:
-        msg = colourString(colourString(getLineInfo(leveloffset), Colours.UNDERLINE), Colours.OKBLUE) + ': [' + str(vname) + '] (' + colourString(
-            str(tensor.dtype) + ' ' + str(type(tensor)), Colours.WARNING) + ') -- ' + colourString('%s' % str(tensor.shape), Colours.OKGREEN) + ' ' + usrmsg
+        msg = colourString(colourString(getLineInfo(leveloffset), Colours.UNDERLINE), Colours.OKBLUE) + ': [' + str(vname) + '] (' + colourString(str(
+            tensor.dtype) + ' ' + str(getDevice(tensor)), Colours.WARNING) + ') -- ' + colourString('%s' % str(tensor.shape), Colours.OKGREEN) + ' ' + usrmsg
     print(msg)
 #
 # Print debugging information.
@@ -156,16 +199,14 @@ def hasNAN(t):
 
 def torch_mem():
     dprint('Torch report: Allocated: %.2f MBytes Cached: %.2f' % (
-        torch.cuda.memory_allocated() / (1024 * 2), torch.cuda.memory_cached() / (1024 * 2)), 1)
-
-## MEM utils ##
+        torch.cuda.memory_allocated() / (1024 ** 2), torch.cuda.memory_cached() / (1024 ** 2)), 1)
+# MEM utils
 
 
 def mem_report():
     '''Report the memory usage of the tensor.storage in pytorch
     Both on CPUs and GPUs are reported
     https://gist.github.com/Stonesjtu/368ddf5d9eb56669269ecdf9b0d21cbe'''
-
     def _mem_report(tensors, mem_type):
         '''Print the selected tensors of type
         There are two major storage types in our major concern:
@@ -175,11 +216,11 @@ def mem_report():
             - tensors: the tensors of specified type
             - mem_type: 'CPU' or 'GPU' in current implementation '''
         print('Storage on %s' % (mem_type))
-        print('-'*LEN)
+        print('-' * LEN)
         total_numel = 0
         total_mem = 0
         visited_data = []
-        for tensor in tensors:
+        for idx, tensor in enumerate(tensors):
             if tensor.is_sparse:
                 continue
             # a data_ptr indicates a memory block allocated
@@ -187,28 +228,24 @@ def mem_report():
             if data_ptr in visited_data:
                 continue
             visited_data.append(data_ptr)
-
             numel = tensor.storage().size()
             total_numel += numel
             element_size = tensor.storage().element_size()
-            mem = numel*element_size / 1024/1024  # 32bit=4Byte, MByte
+            mem = numel * element_size / 1024 / 1024  # 32bit=4Byte, MByte
             total_mem += mem
             element_type = type(tensor).__name__
             size = tuple(tensor.size())
-
-            print('%s\t\t%s\t\t%.2f' % (
-                element_type,
-                size,
-                mem))
-        print('-'*LEN)
-        print('Total Tensors: %d \tUsed Memory Space: %.2f MBytes' %
+            print('{:3} {}\t\t{}\t\t{:.2f}\t\t{}'.format(
+                idx, element_type, size, mem, tensor.grad_fn))
+        print('-' * LEN)
+        print('Total Tensors: %d \tUsed Memory Space: %.5f MBytes' %
               (total_numel, total_mem))
         print('Torch report: %.2f MBytes' %
               (torch.cuda.memory_allocated() / (1024 ** 2)))
-        print('-'*LEN)
-
+        print('-' * LEN)
     LEN = 65
-    print('='*LEN)
+    print('=' * LEN)
+    gc.collect()
     objects = gc.get_objects()
     print('%s\t%s\t\t\t%s' % ('Element type', 'Size', 'Used MEM(MBytes)'))
     tensors = [obj for obj in objects if torch.is_tensor(obj)]
@@ -216,4 +253,4 @@ def mem_report():
     host_tensors = [t for t in tensors if not t.is_cuda]
     _mem_report(cuda_tensors, 'GPU')
     _mem_report(host_tensors, 'CPU')
-    print('='*LEN)
+    print('=' * LEN)

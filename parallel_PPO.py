@@ -7,7 +7,7 @@
 import os
 import gym
 import time
-from print_util import *
+import print_custom as db
 from datetime import date
 from collections import namedtuple
 import csv
@@ -246,7 +246,7 @@ class Agent(mp.Process):
             state = self.env.reset()
 
             if i_episodes == self.max_episode+1:
-                printInfo("Max episodes reached")
+                db.printInfo("Max episodes reached")
                 msg = MsgMaxReached(self.proc_id, True)
                 self.pipe.send(msg)
                 break
@@ -257,7 +257,8 @@ class Agent(mp.Process):
 
                 states.append(state)
 
-                action, logprob = self.memory.agent_policy.act(state, False)
+                with torch.no_grad():
+                    action, logprob = self.memory.agent_policy.act(state, False)
                 state, reward, done, _ = self.env.step(action)
 
                 actions.append(action)
@@ -296,7 +297,7 @@ class Agent(mp.Process):
 
             if i_episodes % self.log_interval == 0:
                 running_reward = running_reward/self.log_interval
-                # printInfo("sending reward msg")
+                # db.printInfo("sending reward msg")
                 msg = MsgRewardInfo(self.proc_id, i_episodes, running_reward)
                 self.pipe.send(msg)
                 running_reward = 0
