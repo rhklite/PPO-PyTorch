@@ -9,6 +9,7 @@ import gym
 import time
 import print_custom as db
 from datetime import date
+from datetime import datetime
 from collections import namedtuple
 import csv
 import torch
@@ -17,10 +18,10 @@ import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
-# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-device = "cpu"
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device = "cpu"
+tb_writer = SummaryWriter()
 mp.set_start_method('spawn', True)
-# writer = SummaryWriter()
 
 # creating msgs for communication between subprocess and main process.
 # for when agent reached logging episode
@@ -162,7 +163,7 @@ class PPO:
         # old_disReturn = (old_disReturn - old_disReturn.mean()) / \
         #     (old_disReturn.std()+1e-5)
 
-        for _ in range(self.K_epochs):
+        for epoch in range(self.K_epochs):
             # Evaluating old actions and values:
             logprobs, state_values, dist_entropy = self.policy.evaluate(
                 old_states, old_actions)
@@ -172,6 +173,7 @@ class PPO:
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
             # Finding the surrogate loss:
+            
             advantages = old_disReturn - state_values.detach()
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1-self.eps_clip,
@@ -184,6 +186,7 @@ class PPO:
             loss = -torch.min(surr1, surr2) + 0.5 * \
                 self.MseLoss(state_values, old_disReturn) - 0.005*dist_entropy
 
+            tb_writer.add_scalar("Loss/train", loss.mean(), epoch, time.time())
             # take gradient step
             self.optimizer.zero_grad()
             loss.mean().backward()
@@ -358,7 +361,7 @@ def main():
     # env_name = "Reacher-v2"
     env_name = "LunarLander-v2"
     # env_name = "CartPole-v0"
-    num_agents = 4
+    num_agents = 2
     max_timestep = 300        # per episode the agent is allowed to take
     update_timestep = 2000    # total number of steps to take before update
     max_episode = 50000
@@ -455,9 +458,12 @@ def main():
                                   .format(i, (log_iteration+1)*log_interval,
                                           eps_reward[i]))
                             average_eps_reward += eps_reward[i]
+
+                            tb_writer.add_scalar("Agent_{}_Episodic_Reward".format(i), eps_reward[i], (log_iteration+1)*log_interval, time.time())
                         print("Main: Update Iteration: {}, Avg Reward Amongst Agents: {:.2f}\n"
                               .format(update_iteration,
                                       average_eps_reward/num_agents))
+                        tb_writer.add_scalar("Avg_Agent_reward", average_eps_reward/num_agents, update_iteration, time.time())
                         log_iteration += 1
 
         if False not in agent_completed:
